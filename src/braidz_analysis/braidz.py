@@ -24,10 +24,12 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 
 import pandas as pd
-from tqdm import tqdm
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Set log level to INFO
+logger.setLevel(logging.INFO)
 
 # Check if pyarrow is available
 PYARROW_AVAILABLE = find_spec("pyarrow") is not None
@@ -109,7 +111,7 @@ def read_csv(
                 return table.to_pandas()
             except pa.ArrowInvalid as e:
                 logger.warning(
-                    f"PyArrow parsing failed: {str(e)}, falling back to pandas"
+                    f"PyArrow parsing failed: {str(e)}:{file_obj}, falling back to pandas"
                 )
                 # If pyarrow fails, try pandas as fallback
                 return pd.read_csv(file_obj, comment="#")
@@ -117,10 +119,10 @@ def read_csv(
             return pd.read_csv(file_obj, comment="#")
 
     except pd.errors.EmptyDataError:
-        logger.warning("Empty CSV file encountered")
+        logger.warning(f"Empty CSV file {file_obj} encountered")
         return None
     except Exception as e:
-        raise BraidzParsingError(f"Failed to parse CSV with {parser}: {str(e)}")
+        raise BraidzParsingError(f"Failed to parse CSV {file_obj} with {parser}: {str(e)}")
 
 
 def read_braidz_file(
@@ -224,7 +226,7 @@ def read_multiple_braidz(
             if root_folder:
                 filename = os.path.join(root_folder, filename)
 
-            logger.info(f"Processing file {i+1}/{total_files}: {filename}")
+            print(f"Processing file {i+1}/{total_files}: {filename}")
             data = read_braidz_file(filename, parser=parser)
 
             if data.kalman_estimates is not None:
