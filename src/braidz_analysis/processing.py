@@ -27,13 +27,14 @@ class TrajectoryData:
     xyz: np.ndarray
     sham: np.ndarray
     frames_in_opto_radius: np.ndarray
-    
+
     # a function to generate a mask for the data based on frames in opto radius
     def get_radius_mask(self, threshold: int = 15):
         return self.frames_in_opto_radius > threshold
 
     def get_mean(self, key):
         return np.mean(getattr(self, key), axis=0)
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
