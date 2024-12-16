@@ -27,7 +27,13 @@ class TrajectoryData:
     xyz: np.ndarray
     sham: np.ndarray
     frames_in_opto_radius: np.ndarray
+    
+    # a function to generate a mask for the data based on frames in opto radius
+    def get_radius_mask(self, threshold: int = 15):
+        return self.frames_in_opto_radius > threshold
 
+    def get_mean(self, key):
+        return np.mean(getattr(self, key), axis=0)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -101,11 +107,11 @@ def get_stim_or_opto_data(df: pd.DataFrame, stim_or_opto: pd.DataFrame, **kwargs
         xyzs.append(grp[["x", "y", "z"]].values[stim_or_opto_range])
         sham.append(row.get("is_sham", False))
 
-    return {
-        "angular_velocity": np.array(angvels),
-        "linear_velocity": np.array(linvels),
-        "heading_diff": np.array(heading_diffs),
-        "xyz": np.array(xyzs),
-        "sham": np.array(sham),
-        "frames_in_opto_radius": np.array(frames_in_opto_radius),
-    }
+    trajectory_data = TrajectoryData()
+    trajectory_data.angular_velocity = np.array(angvels)
+    trajectory_data.linear_velocity = np.array(linvels)
+    trajectory_data.heading_diff = np.array(heading_diffs)
+    trajectory_data.xyz = np.array(xyzs)
+    trajectory_data.sham = np.array(sham)
+    trajectory_data.frames_in_opto_radius = np.array(frames_in_opto_radius)
+    return trajectory_data
