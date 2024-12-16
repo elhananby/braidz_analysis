@@ -86,8 +86,12 @@ def heading_diff(heading, idx, window=25):
     Returns:
         float: Difference in heading.
     """
-    heading_before = circmean(heading[max(0, idx - window) : idx])
-    heading_after = circmean(heading[idx : min(len(heading), idx + window)])
+    heading_before = circmean(
+        heading[max(0, idx - window) : idx], low=-np.pi, high=np.pi
+    )
+    heading_after = circmean(
+        heading[idx : min(len(heading), idx + window)], low=-np.pi, high=np.pi
+    )
 
     heading_difference = np.arctan2(
         np.sin(heading_after - heading_before), np.cos(heading_after - heading_before)
@@ -110,7 +114,7 @@ def heading_diff_pos(xyz, idx, window=25):
     """
     if np.shape(xyz)[1] == 3:
         xyz = xyz[:, :2]
-        
+
     v1 = xyz[max(0, idx - window), :]
     v2 = xyz[idx, :]
     v3 = xyz[min(idx + window, xyz.shape[1]), :]

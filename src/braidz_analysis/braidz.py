@@ -120,7 +120,9 @@ def read_csv(
         logger.warning(f"Empty CSV file {file_obj} encountered")
         return None
     except Exception as e:
-        raise BraidzParsingError(f"Failed to parse CSV {file_obj} with {parser}: {str(e)}")
+        raise BraidzParsingError(
+            f"Failed to parse CSV {file_obj} with {parser}: {str(e)}"
+        )
 
 
 def read_braidz_file(
@@ -260,6 +262,7 @@ def read_multiple_braidz(
         logger.info(f"Combined {len(optos)} optogenetics dataframes")
 
     return result
+
 
 # Basic usage - will use pyarrow if available, otherwise pandas
 # data = read_braidz_file("path/to/file.braidz")
