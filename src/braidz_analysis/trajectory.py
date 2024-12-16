@@ -18,7 +18,7 @@ def calculate_angular_velocity(xvel, yvel):
     """
     theta = np.arctan2(yvel, xvel)
     theta_unwrap = np.unwrap(theta)
-    _, angular_velocity = butterdiff(theta_unwrap, dt=0.01, params=[1, 0.01])
+    _, angular_velocity = butterdiff(theta_unwrap, dt=0.01, params=[1, 0.1])
     return theta, angular_velocity
 
 

@@ -65,7 +65,10 @@ def validate_frame_range(
     Returns:
         bool: True if frame range is valid, False otherwise
     """
-    return not (frame_idx - pre_frames < 0 or frame_idx + post_frames >= total_frames)
+    if frame_idx - pre_frames < 0 or frame_idx + post_frames >= total_frames:
+        return False  # Invalid frame range
+    else:
+        return True  # Valid frame range
 
 
 def get_frame_range(center_idx: int, pre_frames: int, post_frames: int) -> range:
@@ -193,6 +196,46 @@ def process_stim_data(grp: pd.DataFrame, stim_idx: int, params: AnalysisParams) 
     }
 
 
+def check_median_position(
+    grp: pd.DataFrame,
+    x_range: tuple[float, float] = (-0.2, 0.2),
+    y_range: tuple[float, float] = (-0.2, 0.2),
+    z_range: tuple[float, float] = (0.1, 0.25),  # More restricted than Z_RANGE
+) -> bool:
+    """Check if median position is within central region of arena.
+
+    Verifies if the median x,y,z coordinates fall within a specified central region,
+    useful for ensuring trajectory segments are centered in the arena.
+
+    Args:
+        grp: DataFrame containing 'x', 'y', 'z' position columns
+        xy_radius: Maximum allowed radius from center in x-y plane
+        z_range: Tuple of (min_z, max_z) defining valid z-coordinate range
+
+    Returns:
+        bool: True if median position is within specified bounds
+
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'x': [0.05, 0.06, 0.07],
+        ...     'y': [-0.02, -0.03, -0.02],
+        ...     'z': [0.15, 0.16, 0.15]
+        ... })
+        >>> is_centered = check_median_position(df, xy_radius=0.1, z_range=(0.1, 0.25))
+    """
+    # Calculate median position
+    median_x = np.median(grp["x"].values)
+    median_y = np.median(grp["y"].values)
+    median_z = np.median(grp["z"].values)
+
+    # Check if median position is within bounds
+    return (
+        x_range[0] <= median_x <= x_range[1]
+        and y_range[0] <= median_y <= y_range[1]
+        and z_range[0] <= median_z <= z_range[1]
+    )
+
+
 def process_saccade_data(
     grp: pd.DataFrame, sac_idx: int, stim_indices: list, params: AnalysisParams
 ) -> dict:
@@ -271,6 +314,10 @@ def get_stim_or_opto_data(
             logger.debug(f"Skipping {obj_id} with {len(grp)} frames")
             continue
 
+        if not check_median_position(grp):
+            logger.debug(f"Skipping {obj_id} with invalid median position")
+            continue
+
         try:
             stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
         except IndexError:
@@ -304,8 +351,16 @@ def get_all_saccades(
     Returns:
         dict: Dictionary of numpy arrays containing processed metrics
     """
-    saccade_params = SaccadeParams(**kwargs)
-    analysis_params = AnalysisParams(**kwargs)
+    saccade_params = SaccadeParams(
+        kwargs.get("threshold", np.deg2rad(300)), kwargs.get("distance", 10)
+    )
+    analysis_params = AnalysisParams(
+        kwargs.get("pre_frames", 50),
+        kwargs.get("post_frames", 50),
+        kwargs.get("min_frames", 300),
+        kwargs.get("opto_radius", 0.025),
+        kwargs.get("opto_duration", 30),
+    )
 
     results = {
         "angular_velocity": [],
