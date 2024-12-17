@@ -5,6 +5,7 @@ from enum import Enum
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import inspect
 
 from .trajectory import (
     calculate_angular_velocity,
@@ -89,11 +90,11 @@ class AnalysisParams:
     opto_radius: float = 0.025
     opto_duration: int = 30
 
-    def __init__(self, **kwargs):
-        """Override default values with provided parameters."""
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
+    @classmethod
+    def from_dict(cls, env):
+        return cls(
+            **{k: v for k, v in env.items() if k in inspect.signature(cls).parameters}
+        )
 
 
 @dataclass
@@ -108,11 +109,11 @@ class SaccadeParams:
     threshold: float = np.deg2rad(300)
     distance: int = 10
 
-    def __init__(self, **kwargs):
-        """Override default values with provided parameters."""
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
+    @classmethod
+    def from_dict(cls, env):
+        return cls(
+            **{k: v for k, v in env.items() if k in inspect.signature(cls).parameters}
+        )
 
 
 def validate_frame_range(
@@ -354,7 +355,7 @@ def get_stim_or_opto_data(
     Returns:
         dict: Dictionary of numpy arrays containing processed metrics
     """
-    params = AnalysisParams(**kwargs)
+    params = AnalysisParams.from_dict(kwargs)
     results = {
         "angular_velocity": [],
         "linear_velocity": [],
@@ -421,8 +422,8 @@ def get_all_saccades(
     Returns:
         TrajectoryAnalysisResults: Processed trajectory metrics and saccade information
     """
-    saccade_params = SaccadeParams(**kwargs)
-    analysis_params = AnalysisParams(**kwargs)
+    saccade_params = SaccadeParams.from_dict(kwargs)
+    analysis_params = AnalysisParams.from_dict(kwargs)
 
     results = {
         "angular_velocity": [],
