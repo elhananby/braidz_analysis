@@ -37,6 +37,9 @@ def plot_mean_and_std(
     # Plot mean line
     ax.plot(mean, **kwargs)
 
+    # remove `label` from kwargs to avoid passing it to fill_between
+    kwargs.pop("label", None)
+
     # Add standard deviation envelope
     ax.fill_between(
         range(len(mean)),  # x coordinates

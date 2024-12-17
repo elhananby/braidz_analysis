@@ -1,22 +1,74 @@
+import logging
+from dataclasses import dataclass
+from enum import Enum
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import logging
-from dataclasses import dataclass
+
 from .trajectory import (
     calculate_angular_velocity,
     calculate_linear_velocity,
-    heading_diff,
     detect_saccades,
+    heading_diff,
 )
 
 # Constants for trajectory analysis
 MAX_RADIUS = 0.23  # Maximum allowed radius for valid trajectories
 Z_RANGE = [0.05, 0.3]  # Valid range for z-coordinate [min, max]
 
+
+class SaccadeType(str, Enum):
+    SPONTANEOUS = "spontaneous"
+    STIM_OR_OPTO = "stim_or_opto"
+    NO_RESPONSE = "stim_or_opto_no_response"
+
+
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+@dataclass
+class TrajectoryAnalysisResults:
+    """Results from trajectory analysis.
+
+    Contains all possible metrics that could be returned from trajectory analysis functions.
+    Not all fields will be populated by every analysis function.
+
+    Attributes:
+        angular_velocity: Array of angular velocities (n_samples, n_timepoints)
+        linear_velocity: Array of linear velocities (n_samples, n_timepoints)
+        xyz: Array of positions (n_samples, n_timepoints, 3)
+        heading_diff: Array of heading differences (n_samples, n_timepoints)
+        saccade_type: Array of saccade type labels (n_samples,)
+        sham: Array of boolean sham indicators (n_samples,)
+        frames_in_opto_radius: Array of frame counts within opto radius (n_samples,)
+    """
+
+    angular_velocity: np.ndarray
+    linear_velocity: np.ndarray
+    xyz: np.ndarray
+    heading_diff: np.ndarray
+    saccade_type: np.ndarray | None = None  # Optional fields that aren't always present
+    sham: np.ndarray | None = None
+    frames_in_opto_radius: np.ndarray | None = None
+
+    def __post_init__(self):
+        """Validate array shapes after initialization."""
+        n_samples = len(self.angular_velocity)
+        assert len(self.linear_velocity) == n_samples, "Mismatched sample counts"
+        assert len(self.xyz) == n_samples, "Mismatched sample counts"
+        assert len(self.heading_diff) == n_samples, "Mismatched sample counts"
+
+        if self.saccade_type is not None:
+            assert len(self.saccade_type) == n_samples, "Mismatched sample counts"
+        if self.sham is not None:
+            assert len(self.sham) == n_samples, "Mismatched sample counts"
+        if self.frames_in_opto_radius is not None:
+            assert (
+                len(self.frames_in_opto_radius) == n_samples
+            ), "Mismatched sample counts"
 
 
 @dataclass
@@ -37,6 +89,12 @@ class AnalysisParams:
     opto_radius: float = 0.025
     opto_duration: int = 30
 
+    def __init__(self, **kwargs):
+        """Override default values with provided parameters."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
 
 @dataclass
 class SaccadeParams:
@@ -49,6 +107,12 @@ class SaccadeParams:
 
     threshold: float = np.deg2rad(300)
     distance: int = 10
+
+    def __init__(self, **kwargs):
+        """Override default values with provided parameters."""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
 
 def validate_frame_range(
@@ -339,28 +403,26 @@ def get_stim_or_opto_data(
 
 
 def get_all_saccades(
-    df: pd.DataFrame, stim_or_opto: pd.DataFrame = None, **kwargs
-) -> dict:
-    """Analyze all saccades in the trajectory data.
+    df: pd.DataFrame,
+    stim_or_opto: pd.DataFrame = None,
+    use_opto_or_stim_only: bool = False,
+    latency: int = 15,  # Default latency for no-response windows
+    **kwargs,
+) -> TrajectoryAnalysisResults:
+    """Analyze all saccades in trajectory data with optional stim/opto event processing.
 
     Args:
         df: DataFrame containing trajectory data
         stim_or_opto: Optional DataFrame containing stimulation timing information
+        use_opto_or_stim_only: If True, only process groups present in stim_or_opto
+        latency: Number of frames to delay window center for no-response cases
         **kwargs: Additional parameters for analysis
 
     Returns:
-        dict: Dictionary of numpy arrays containing processed metrics
+        TrajectoryAnalysisResults: Processed trajectory metrics and saccade information
     """
-    saccade_params = SaccadeParams(
-        kwargs.get("threshold", np.deg2rad(300)), kwargs.get("distance", 10)
-    )
-    analysis_params = AnalysisParams(
-        kwargs.get("pre_frames", 50),
-        kwargs.get("post_frames", 50),
-        kwargs.get("min_frames", 300),
-        kwargs.get("opto_radius", 0.025),
-        kwargs.get("opto_duration", 30),
-    )
+    saccade_params = SaccadeParams(**kwargs)
+    analysis_params = AnalysisParams(**kwargs)
 
     results = {
         "angular_velocity": [],
@@ -368,18 +430,45 @@ def get_all_saccades(
         "xyz": [],
         "heading_diff": [],
         "saccade_type": [],
+        "frames_in_opto_radius": [],
     }
 
-    # Process each trajectory group
-    for (obj_id, exp_num), grp in tqdm(
-        df.groupby(["obj_id", "exp_num"]), total=len(df)
-    ):
+    # Determine which groups to process
+    if use_opto_or_stim_only and stim_or_opto is not None:
+        # Only process groups from stim_or_opto
+        unique_groups = stim_or_opto[["obj_id", "exp_num"]].drop_duplicates()
+    else:
+        # Process all groups from df
+        unique_groups = df[["obj_id", "exp_num"]].drop_duplicates()
+
+    for _, group_info in tqdm(unique_groups.iterrows(), total=len(unique_groups)):
+        obj_id = group_info["obj_id"]
+        exp_num = group_info["exp_num"]
+
+        # Get trajectory group
+        grp = df[(df["obj_id"] == obj_id) & (df["exp_num"] == exp_num)]
+
+        # Basic validation
         if len(grp) < analysis_params.min_frames:
             logger.debug(f"Skipping {obj_id} with {len(grp)} frames")
             continue
 
-        # Get stimulus indices if available
-        stim_indices = []
+        # Check median position only when processing all groups
+        if not use_opto_or_stim_only and not check_median_position(grp):
+            logger.debug(f"Skipping {obj_id} with invalid median position")
+            continue
+
+        # Calculate trajectory metrics and detect saccades
+        heading, angular_velocity, linear_velocity = calculate_trajectory_metrics(grp)
+        saccades = detect_saccades(
+            angular_velocity,
+            height=saccade_params.threshold,
+            distance=saccade_params.distance,
+        )
+
+        # Get stim/opto events for this group if available
+        stim_events = []
+        frames_in_radius = np.nan
         if stim_or_opto is not None:
             stim_grp = stim_or_opto[
                 (stim_or_opto["obj_id"] == obj_id)
@@ -388,27 +477,93 @@ def get_all_saccades(
             for _, row in stim_grp.iterrows():
                 try:
                     stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
-                    stim_indices.append(stim_idx)
+                    frames_in_radius = calculate_radius_metrics(
+                        grp, stim_idx, analysis_params
+                    )
+                    stim_events.append((stim_idx, frames_in_radius))
                 except IndexError:
-                    continue
+                    logger.debug(f"No stim frame {row['frame']} found for {obj_id}")
 
-        # Calculate trajectory metrics and detect saccades
-        _, angular_velocity, _ = calculate_trajectory_metrics(grp)
-        saccades = detect_saccades(
-            angular_velocity,
-            height=saccade_params.threshold,
-            distance=saccade_params.distance,
-        )
-
-        # Process each saccade
+        # Process saccades
         for sac_idx in saccades:
-            processed_data = process_saccade_data(
-                grp, sac_idx, stim_indices, analysis_params
-            )
-            if processed_data is None:
+            # Validate frame range (not overflowing start/end of trajectory)
+            if not validate_frame_range(
+                sac_idx,
+                len(grp),
+                analysis_params.pre_frames,
+                analysis_params.post_frames,
+            ):
                 continue
 
-            for key in results:
-                results[key].append(processed_data[key])
+            # Check flying bounds (within central region of arena)
+            x, y, z = grp[["x", "y", "z"]].values[sac_idx]
+            if not check_flying_bounds(x, y, z):
+                continue
 
-    return {k: np.array(v) for k, v in results.items()}
+            # Determine saccade type and which stim event it belongs to
+            saccade_type = SaccadeType.SPONTANEOUS
+            current_frames_in_radius = np.nan
+
+            for stim_idx, radius_frames in stim_events:
+                if stim_idx < sac_idx < stim_idx + analysis_params.opto_duration:
+                    saccade_type = SaccadeType.STIM_OR_OPTO
+                    current_frames_in_radius = radius_frames
+                    # Remove this stim event as we found its first saccade
+                    stim_events = [(s, r) for s, r in stim_events if s != stim_idx]
+                    break
+
+            # Get frame range for analysis
+            sac_range = get_frame_range(
+                sac_idx, analysis_params.pre_frames, analysis_params.post_frames
+            )
+
+            # Collect saccade results
+            results["angular_velocity"].append(angular_velocity[sac_range])
+            results["linear_velocity"].append(linear_velocity[sac_range])
+            results["xyz"].append(grp[["x", "y", "z"]].values[sac_range])
+            results["heading_diff"].append(heading_diff(heading, sac_idx, window=25))
+            results["saccade_type"].append(saccade_type)
+            results["frames_in_opto_radius"].append(current_frames_in_radius)
+
+        # Process remaining stim events with no response
+        for stim_idx, radius_frames in stim_events:
+            # Center window at stim_idx + latency
+            window_center = stim_idx + latency
+
+            # Validate frame range and flying bounds
+            if not validate_frame_range(
+                window_center,
+                len(grp),
+                analysis_params.pre_frames,
+                analysis_params.post_frames,
+            ):
+                continue
+
+            x, y, z = grp[["x", "y", "z"]].values[window_center]
+            if not check_flying_bounds(x, y, z):
+                continue
+
+            # Get frame range for analysis
+            window_range = get_frame_range(
+                window_center, analysis_params.pre_frames, analysis_params.post_frames
+            )
+
+            # Collect no-response results
+            results["angular_velocity"].append(angular_velocity[window_range])
+            results["linear_velocity"].append(linear_velocity[window_range])
+            results["xyz"].append(grp[["x", "y", "z"]].values[window_range])
+            results["heading_diff"].append(
+                heading_diff(heading, window_center, window=25)
+            )
+            results["saccade_type"].append(SaccadeType.NO_RESPONSE)
+            results["frames_in_opto_radius"].append(radius_frames)
+
+    # Convert results to numpy arrays and return
+    return TrajectoryAnalysisResults(
+        angular_velocity=np.array(results["angular_velocity"]),
+        linear_velocity=np.array(results["linear_velocity"]),
+        xyz=np.array(results["xyz"]),
+        heading_diff=np.array(results["heading_diff"]),
+        saccade_type=np.array(results["saccade_type"]),
+        frames_in_opto_radius=np.array(results["frames_in_opto_radius"]),
+    )
