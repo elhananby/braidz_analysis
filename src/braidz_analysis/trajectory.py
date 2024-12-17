@@ -74,7 +74,7 @@ def sg_smooth(arr, **kwargs):
     )
 
 
-def heading_diff(heading, idx, window=25):
+def calculate_heading_diff(heading, idx, window=25):
     """
     Calculate the difference in heading at a specific index.
 
