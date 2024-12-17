@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from enum import Enum
 
 import numpy as np
 import pandas as pd
@@ -19,10 +18,10 @@ MAX_RADIUS = 0.23  # Maximum allowed radius for valid trajectories
 Z_RANGE = [0.05, 0.3]  # Valid range for z-coordinate [min, max]
 
 
-class SaccadeType(str, Enum):
-    SPONTANEOUS = "spontaneous"
-    STIM_OR_OPTO = "stim_or_opto"
-    NO_RESPONSE = "stim_or_opto_no_response"
+# class SaccadeType(str, Enum):
+#     SPONTANEOUS = "spontaneous"
+#     STIM_OR_OPTO = "stim_or_opto"
+#     NO_RESPONSE = "stim_or_opto_no_response"
 
 
 # Configure logging
@@ -89,6 +88,7 @@ class AnalysisParams:
     min_frames: int = 300
     opto_radius: float = 0.025
     opto_duration: int = 30
+    response_delay: int = 0
 
     @classmethod
     def from_dict(cls, env):
@@ -255,7 +255,9 @@ def process_stim_data(grp: pd.DataFrame, stim_idx: int, params: AnalysisParams) 
     return {
         "angular_velocity": angular_velocity[stim_range],
         "linear_velocity": linear_velocity[stim_range],
-        "heading_diff": heading_diff(heading, stim_idx, window=25),
+        "heading_diff": heading_diff(
+            heading, stim_idx + params.response_delay, window=15
+        ),
         "xyz": grp[["x", "y", "z"]].values[stim_range],
         "frames_in_radius": calculate_radius_metrics(grp, stim_idx, params),
     }
@@ -343,7 +345,10 @@ def process_saccade_data(
 
 
 def get_stim_or_opto_data(
-    df: pd.DataFrame, stim_or_opto: pd.DataFrame, **kwargs
+    df: pd.DataFrame,
+    stim_or_opto: pd.DataFrame,
+    analysis_params: AnalysisParams = None,
+    **kwargs,
 ) -> dict:
     """Analyze trajectory data around stimulus or optogenetic manipulation points.
 
@@ -355,7 +360,9 @@ def get_stim_or_opto_data(
     Returns:
         dict: Dictionary of numpy arrays containing processed metrics
     """
-    params = AnalysisParams.from_dict(kwargs)
+    if analysis_params is None:
+        analysis_params = AnalysisParams.from_dict(kwargs)
+
     results = {
         "angular_velocity": [],
         "linear_velocity": [],
@@ -375,7 +382,7 @@ def get_stim_or_opto_data(
         if exp_num is not None:
             grp = grp[grp["exp_num"] == exp_num]
 
-        if len(grp) < params.min_frames:
+        if len(grp) < analysis_params.min_frames:
             logger.debug(f"Skipping {obj_id} with {len(grp)} frames")
             continue
 
@@ -389,7 +396,7 @@ def get_stim_or_opto_data(
             logger.debug(f"Skipping {obj_id} with no frame {row['frame']}")
             continue
 
-        processed_data = process_stim_data(grp, stim_idx, params)
+        processed_data = process_stim_data(grp, stim_idx, analysis_params)
         if processed_data is None:
             continue
 
@@ -400,7 +407,15 @@ def get_stim_or_opto_data(
             else:
                 results[key].append(processed_data.get(key, None))
 
-    return {k: np.array(v) for k, v in results.items()}
+    return TrajectoryAnalysisResults(
+        angular_velocity=np.array(results["angular_velocity"]),
+        linear_velocity=np.array(results["linear_velocity"]),
+        xyz=np.array(results["xyz"]),
+        heading_diff=np.array(results["heading_diff"]),
+        sham=np.array(results["sham"]),
+        frames_in_opto_radius=np.array(results["frames_in_opto_radius"]),
+    )
+    # return {k: np.array(v) for k, v in results.items()}
 
 
 def get_all_saccades(
@@ -408,7 +423,8 @@ def get_all_saccades(
     stim_or_opto: pd.DataFrame = None,
     use_opto_or_stim_only: bool = False,
     latency: int = 15,  # Default latency for no-response windows
-    **kwargs,
+    saccade_params: SaccadeParams = None,
+    analysis_params: AnalysisParams = None,
 ) -> TrajectoryAnalysisResults:
     """Analyze all saccades in trajectory data with optional stim/opto event processing.
 
@@ -422,8 +438,10 @@ def get_all_saccades(
     Returns:
         TrajectoryAnalysisResults: Processed trajectory metrics and saccade information
     """
-    saccade_params = SaccadeParams.from_dict(kwargs)
-    analysis_params = AnalysisParams.from_dict(kwargs)
+    if saccade_params is None:
+        saccade_params = SaccadeParams()
+    if analysis_params is None:
+        analysis_params = AnalysisParams()
 
     results = {
         "angular_velocity": [],
@@ -475,6 +493,8 @@ def get_all_saccades(
                 (stim_or_opto["obj_id"] == obj_id)
                 & (stim_or_opto["exp_num"] == exp_num)
             ]
+
+            # loop over the stim events, and save the stim_idx and frames_in_radius
             for _, row in stim_grp.iterrows():
                 try:
                     stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
@@ -502,12 +522,12 @@ def get_all_saccades(
                 continue
 
             # Determine saccade type and which stim event it belongs to
-            saccade_type = SaccadeType.SPONTANEOUS
+            saccade_type = "spontaneous"
             current_frames_in_radius = np.nan
 
             for stim_idx, radius_frames in stim_events:
                 if stim_idx < sac_idx < stim_idx + analysis_params.opto_duration:
-                    saccade_type = SaccadeType.STIM_OR_OPTO
+                    saccade_type = "stim_or_opto"
                     current_frames_in_radius = radius_frames
                     # Remove this stim event as we found its first saccade
                     stim_events = [(s, r) for s, r in stim_events if s != stim_idx]
@@ -522,7 +542,7 @@ def get_all_saccades(
             results["angular_velocity"].append(angular_velocity[sac_range])
             results["linear_velocity"].append(linear_velocity[sac_range])
             results["xyz"].append(grp[["x", "y", "z"]].values[sac_range])
-            results["heading_diff"].append(heading_diff(heading, sac_idx, window=25))
+            results["heading_diff"].append(heading_diff(heading, sac_idx, window=5))
             results["saccade_type"].append(saccade_type)
             results["frames_in_opto_radius"].append(current_frames_in_radius)
 
@@ -554,9 +574,9 @@ def get_all_saccades(
             results["linear_velocity"].append(linear_velocity[window_range])
             results["xyz"].append(grp[["x", "y", "z"]].values[window_range])
             results["heading_diff"].append(
-                heading_diff(heading, window_center, window=25)
+                heading_diff(heading, window_center, window=5)
             )
-            results["saccade_type"].append(SaccadeType.NO_RESPONSE)
+            results["saccade_type"].append("stim_or_opto_no_response")
             results["frames_in_opto_radius"].append(radius_frames)
 
     # Convert results to numpy arrays and return

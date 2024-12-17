@@ -81,7 +81,12 @@ def plot_histogram(
 
 
 def add_shaded_region(
-    ax: plt.Axes, start: int, end: int, color: str = "gray", alpha: float = 0.3
+    ax: plt.Axes,
+    start: int,
+    end: int,
+    color: str = "gray",
+    alpha: float = 0.3,
+    **kwargs,
 ) -> plt.Axes:
     """Add a vertical shaded region to an existing plot.
 
@@ -109,6 +114,7 @@ def add_shaded_region(
         end,  # x end
         color=color,
         alpha=alpha,
+        **kwargs,
     )
 
     return ax
