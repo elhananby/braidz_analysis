@@ -24,13 +24,13 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[dependency-groups]
-dev = [
-    "braidz-analysis",
-]
+# [dependency-groups]
+# dev = [
+#     "braidz-analysis",
+# ]
 
-[tool.uv.sources]
-braidz-analysis = { workspace = true }
+# [tool.uv.sources]
+# braidz-analysis = { workspace = true }
 
 [project.optional-dependencies]
 dev = [
