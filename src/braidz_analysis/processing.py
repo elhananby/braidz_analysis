@@ -10,6 +10,7 @@ from .trajectory import (
     calculate_angular_velocity,
     calculate_linear_velocity,
     detect_saccades,
+    calculate_heading_diff,
 )
 
 from scipy.stats import circmean
@@ -140,12 +141,20 @@ class SaccadeParams:
 
 
 def get_opto_data(
-    df: pd.DataFrame, opto: pd.DataFrame, params: dict | OptoAnalysis | None = None
+    df: pd.DataFrame,
+    opto: pd.DataFrame,
+    opto_params: dict | OptoAnalysis | None = None,
+    saccade_params: dict | SaccadeParams | None = None,
 ) -> dict:
-    if isinstance(params, dict):
-        params = OptoAnalysis.from_dict(params)
-    elif params is None:
-        params = OptoAnalysis()
+    if isinstance(opto_params, dict):
+        looming_params = LoomingAnalysis.from_dict(opto_params)
+    elif looming_params is None:
+        looming_params = LoomingAnalysis()
+
+    if isinstance(saccade_params, dict):
+        saccade_params = SaccadeParams.from_dict(saccade_params)
+    elif saccade_params is None:
+        saccade_params = SaccadeParams()
 
     opto_data = {
         "angular_velocity": [],
@@ -166,7 +175,7 @@ def get_opto_data(
         else:
             grp = df[df["obj_id"] == row["obj_id"]]
 
-        if len(grp) < params.min_frames:
+        if len(grp) < opto_params.min_frames:
             logger.debug(f"Skipping trajectory with {len(grp)} frames")
             continue
 
@@ -176,8 +185,9 @@ def get_opto_data(
             logger.debug("Skipping trajectory with no opto frame")
             continue
 
-        if opto_idx - params.pre_frames < 0 or opto_idx + params.post_frames >= len(
-            grp
+        if (
+            opto_idx - opto_params.pre_frames < 0
+            or opto_idx + opto_params.post_frames >= len(grp)
         ):
             logger.debug("Skipping trajectory with insufficient frames")
             continue
@@ -191,11 +201,14 @@ def get_opto_data(
         # calculate how many frames in opto radius
         radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
         frames_in_opto_radius = np.sum(
-            radius[opto_idx : opto_idx + params.opto_duration] < params.opto_radius
+            radius[opto_idx : opto_idx + opto_params.opto_duration]
+            < opto_params.opto_radius
         )
 
         # get opto range
-        opto_range = range(opto_idx - params.pre_frames, opto_idx + params.post_frames)
+        opto_range = range(
+            opto_idx - opto_params.pre_frames, opto_idx + opto_params.post_frames
+        )
 
         opto_data["angular_velocity"].append(angular_velocity[opto_range])
         opto_data["linear_velocity"].append(linear_velocity[opto_range])
@@ -203,30 +216,22 @@ def get_opto_data(
         opto_data["frames_in_opto_radius"].append(frames_in_opto_radius)
 
         # calculate heading difference
-        heading_before = circmean(
-            heading[opto_idx - HEADING_DIFF_WINDOW : opto_idx], low=-np.pi, high=np.pi
-        )
-        heading_after = circmean(
-            heading[
-                opto_idx + params.opto_duration : opto_idx
-                + params.opto_duration
-                + HEADING_DIFF_WINDOW
-            ],
-            low=-np.pi,
-            high=np.pi,
+        # TODO: CHANGE TO ACCEPT START AND END INDEX (CALCULATE FROM OPTO_IDX-HEADING_DIFF_WINDOW TO OPTO_IDX+HEADING_DIFF_WINDOW+OPTO_DURATION)
+        heading_difference = calculate_heading_diff(
+            heading, opto_idx, HEADING_DIFF_WINDOW
         )
 
-        heading_difference = np.arctan2(
-            np.sin(heading_after - heading_before),
-            np.cos(heading_after - heading_before),
-        )
         opto_data["heading_difference"].append(heading_difference)
         opto_data["sham"].append(row["sham"] if "sham" in row else False)
 
         # find all peaks
-        peaks = detect_saccades(angular_velocity, params.threshold, params.distance)
+        peaks = detect_saccades(
+            angular_velocity, saccade_params.threshold, saccade_params.distance
+        )
         opto_peak = [
-            peak for peak in peaks if opto_idx < peak < opto_idx + params.opto_duration
+            peak
+            for peak in peaks
+            if opto_idx < peak < opto_idx + opto_params.opto_duration
         ]
         if len(opto_peak) == 0:
             opto_data["angular_velocity_peak_centered"].append(np.nan)
@@ -235,27 +240,16 @@ def get_opto_data(
         else:
             opto_peak = opto_peak[0]  # only take the first peak
             peak_centered_angular_velocity = angular_velocity[
-                opto_peak - params.pre_frames : opto_peak + params.post_frames
+                opto_peak - opto_params.pre_frames : opto_peak + opto_params.post_frames
             ]
             peak_centered_linear_velocity = linear_velocity[
-                opto_peak - params.pre_frames : opto_peak + params.post_frames
+                opto_peak - opto_params.pre_frames : opto_peak + opto_params.post_frames
             ]
 
-            peak_centered_heading_before = circmean(
-                heading[opto_peak - HEADING_DIFF_WINDOW : opto_peak],
-                low=-np.pi,
-                high=np.pi,
-            )
-            peak_centered_heading_after = circmean(
-                heading[opto_peak : opto_peak + HEADING_DIFF_WINDOW],
-                low=-np.pi,
-                high=np.pi,
+            peak_centered_heading_difference = calculate_heading_diff(
+                heading, opto_peak, HEADING_DIFF_WINDOW
             )
 
-            peak_centered_heading_difference = np.arctan2(
-                np.sin(peak_centered_heading_after - peak_centered_heading_before),
-                np.cos(peak_centered_heading_after - peak_centered_heading_before),
-            )
             opto_data["angular_velocity_peak_centered"].append(
                 peak_centered_angular_velocity
             )
@@ -359,6 +353,9 @@ def get_stim_data(
             np.sin(heading_after - heading_before),
             np.cos(heading_after - heading_before),
         )
+        heading_difference = calculate_heading_diff(
+            heading, stim_idx, HEADING_DIFF_WINDOW
+        )
         stim_data["heading_difference"].append(heading_difference)
 
         # find all peaks
@@ -401,21 +398,10 @@ def get_stim_data(
             ]
 
             # get peak centered heading difference
-            peak_centered_heading_before = circmean(
-                heading[stim_peak - HEADING_DIFF_WINDOW : stim_peak],
-                low=-np.pi,
-                high=np.pi,
-            )
-            peak_centered_heading_after = circmean(
-                heading[stim_peak : stim_peak + HEADING_DIFF_WINDOW],
-                low=-np.pi,
-                high=np.pi,
+            peak_centered_heading_difference = calculate_heading_diff(
+                heading, stim_peak, HEADING_DIFF_WINDOW
             )
 
-            peak_centered_heading_difference = np.arctan2(
-                np.sin(peak_centered_heading_after - peak_centered_heading_before),
-                np.cos(peak_centered_heading_after - peak_centered_heading_before),
-            )
             # append peak centered data
             stim_data["angular_velocity_peak_centered"].append(
                 peak_centered_angular_velocity
