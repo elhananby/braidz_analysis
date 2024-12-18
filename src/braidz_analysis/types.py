@@ -9,7 +9,7 @@ import numpy as np
 @dataclass
 class TrajectoryParams:
     max_radius = 0.23
-    xy_range = [-0.23, 0.23]
+    xy_range = [-0.24, 0.24]
     z_range = [0.05, 0.3]
     heading_diff_window = 10
 

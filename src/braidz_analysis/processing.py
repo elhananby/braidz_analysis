@@ -372,6 +372,85 @@ def get_stim_data(
     return dict_list_to_numpy(stim_data)
 
 
+def filter_trajectories(
+    df: pd.DataFrame,
+    saccade_params: dict | SaccadeParams | None = None,
+    trajectory_params: dict | TrajectoryParams | None = None,
+) -> pd.DataFrame:
+    """Filter trajectory data based on length and spatial criteria.
+
+    Args:
+        df: DataFrame containing trajectory data
+        saccade_params: Saccade detection parameters
+        trajectory_params: Trajectory analysis parameters including spatial bounds
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame containing only valid trajectories
+    """
+    # Initialize parameters using ParameterManager
+    params = {
+        "saccade": ParameterManager.initialize_params(
+            AnalysisParamType.SACCADE, saccade_params
+        ),
+        "trajectory": ParameterManager.initialize_params(
+            AnalysisParamType.TRAJECTORY, trajectory_params
+        ),
+    }
+
+    # Define grouping columns
+    group_cols = ["obj_id", "exp_num"] if "exp_num" in df.columns else ["obj_id"]
+
+    # Calculate group statistics in a single pass
+    group_stats = (
+        df.groupby(group_cols)
+        .agg(
+            {
+                "x": "median",
+                "y": "median",
+                "z": "median",
+                "obj_id": "size",  # This gives us the length of each group
+            }
+        )
+        .rename(columns={"obj_id": "trajectory_length"})
+    )
+
+    # Create masks for each filtering criterion
+    length_mask = (
+        group_stats["trajectory_length"] >= params["saccade"].min_trajectory_length
+    )
+
+    x_median_mask = (group_stats["x"] > params["trajectory"].xy_range[0]) & (
+        group_stats["x"] < params["trajectory"].xy_range[1]
+    )
+    y_median_mask = (group_stats["y"] > params["trajectory"].xy_range[0]) & (
+        group_stats["y"] < params["trajectory"].xy_range[1]
+    )
+    z_median_mask = (group_stats["z"] > params["trajectory"].z_range[0]) & (
+        group_stats["z"] < params["trajectory"].z_range[1]
+    )
+
+    # Combine all masks
+    valid_groups = group_stats[
+        length_mask & x_median_mask & y_median_mask & z_median_mask
+    ].index
+
+    # Log filtering results
+    total_groups = len(group_stats)
+    valid_group_count = len(valid_groups)
+    logger.info(f"Filtered {total_groups - valid_group_count} trajectories:")
+    logger.info(f"- {total_groups - length_mask.sum()} failed length criterion")
+    logger.info(
+        f"- {total_groups - (x_median_mask & y_median_mask & z_median_mask).sum()} failed spatial criteria"
+    )
+    logger.info(f"Retained {valid_group_count} valid trajectories")
+
+    # Filter the original DataFrame
+    if isinstance(valid_groups, pd.MultiIndex):
+        return df.set_index(group_cols).loc[valid_groups].reset_index()
+    else:
+        return df[df[group_cols[0]].isin(valid_groups)]
+
+
 def get_all_saccades(
     df: pd.DataFrame,
     saccade_params: dict | SaccadeParams | None = None,
@@ -387,6 +466,9 @@ def get_all_saccades(
     Returns:
         dict: Dictionary containing analyzed saccade data arrays
     """
+    # Filter trajectories first
+    filtered_df = filter_trajectories(df, saccade_params, trajectory_params)
+
     # Initialize parameters using ParameterManager
     params = {
         "saccade": ParameterManager.initialize_params(
@@ -402,43 +484,20 @@ def get_all_saccades(
         "linear_velocity": [],
         "xyz": [],
         "heading_difference": [],
+        "ISI": [],
+        "saccade_per_second": [],
     }
 
+    # Group the filtered data
     grouped_data = (
-        df.groupby(["obj_id", "exp_num"])
-        if "exp_num" in df.columns
-        else df.groupby("obj_id")
+        filtered_df.groupby(["obj_id", "exp_num"])
+        if "exp_num" in filtered_df.columns
+        else filtered_df.groupby("obj_id")
     )
 
     for _, grp in tqdm(
         grouped_data, desc="Processing trajectories", total=len(grouped_data)
     ):
-        # check length
-        if len(grp) < params["saccade"].min_trajectory_length:
-            logger.debug(f"Skipping trajectory with {len(grp)} frames")
-            continue
-
-        # check median using trajectory params
-        if (
-            not (
-                params["trajectory"].xy_range[0]
-                < grp.x.median()
-                < params["trajectory"].xy_range[1]
-            )
-            and (
-                params["trajectory"].xy_range[0]
-                < grp.y.median()
-                < params["trajectory"].xy_range[1]
-            )
-            and (
-                params["trajectory"].z_range[0]
-                < grp.z.median()
-                < params["trajectory"].z_range[1]
-            )
-        ):
-            logger.debug("Skipping trajectory outside of valid median range")
-            continue
-
         # get angular and linear velocity
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
@@ -454,6 +513,7 @@ def get_all_saccades(
             + (f", exp_num {grp.exp_num.iloc[0]}" if "exp_num" in grp.columns else "")
         )
 
+        good_saccades = []
         # loop and extract saccade traces
         for sac in saccades:
             # check if saccade has enough frames
@@ -463,17 +523,11 @@ def get_all_saccades(
                 logger.debug("Skipping saccade with insufficient frames")
                 continue
 
-            # check if the fly is within spatial bounds
+            # check if the fly is within spatial bounds at saccade time
             if not (
                 (
-                    params["trajectory"].xy_range[0]
-                    < grp.x.iloc[sac]
-                    < params["trajectory"].xy_range[1]
-                )
-                and (
-                    params["trajectory"].xy_range[0]
-                    < grp.y.iloc[sac]
-                    < params["trajectory"].xy_range[1]
+                    np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2)
+                    < params["trajectory"].max_radius
                 )
                 and (
                     params["trajectory"].z_range[0]
@@ -494,25 +548,25 @@ def get_all_saccades(
                 sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
             ]
 
-            # calculate heading difference using trajectory params
-            heading_before = circmean(
-                heading[sac - params["trajectory"].heading_diff_window : sac],
-                low=-np.pi,
-                high=np.pi,
-            )
-            heading_after = circmean(
-                heading[sac : sac + params["trajectory"].heading_diff_window],
-                low=-np.pi,
-                high=np.pi,
-            )
-            heading_difference = np.arctan2(
-                np.sin(heading_after - heading_before),
-                np.cos(heading_after - heading_before),
+            heading_difference = calculate_heading_diff(
+                heading,
+                range(sac - params["trajectory"].heading_diff_window, sac),
+                range(sac, sac + params["trajectory"].heading_diff_window),
             )
 
             saccade_data["angular_velocity"].append(saccade_angular_velocity)
             saccade_data["linear_velocity"].append(saccade_linear_velocity)
             saccade_data["xyz"].append(saccade_xyz)
             saccade_data["heading_difference"].append(heading_difference)
+            good_saccades.append(sac)
+
+        if len(good_saccades) < 2:
+            saccade_data["ISI"].append(np.nan)
+            saccade_data["saccade_per_second"].append(np.nan)
+        else:
+            saccade_data["ISI"].append(np.nanmean(np.diff(good_saccades)))
+            saccade_data["saccade_per_second"].append(
+                len(good_saccades) / (grp.timestamp.iloc[-1] - grp.timestamp.iloc[0])
+            )
 
     return dict_list_to_numpy(saccade_data)
