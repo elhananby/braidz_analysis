@@ -137,3 +137,13 @@ def calculate_vector_angle(v1: Vector, v2: Vector) -> float:
     # Determine sign using cross product
     cross_product = np.cross(v1, v2)
     return -angle if cross_product < 0 else angle
+
+
+def dict_list_to_numpy(data: dict) -> dict:
+    # convert to numpy arrays and return
+    for k, v in data.items():
+        try:
+            data[k] = np.array(v)
+        except ValueError:
+            print(f"Error converting {k} to numpy array")
+    return data

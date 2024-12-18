@@ -74,25 +74,32 @@ def sg_smooth(arr, **kwargs):
     )
 
 
-def calculate_heading_diff(heading, idx, window=25):
+def calculate_heading_diff(heading, indices_before, indices_after):
     """
     Calculate the difference in heading at a specific index.
 
     Args:
         heading (ndarray): Array of headings.
-        idx (int): Index at which to calculate the heading difference.
-        window (int, optional): Number of data points to consider before and after the index. Defaults to 25.
+        incidices_before (ndarray): Array of indices for the before heading calculation.
+        indices_after (ndarray): Array of indices for the after heading calculation.
 
     Returns:
         float: Difference in heading.
     """
-    heading_before = circmean(
-        heading[max(0, idx - window) : idx], low=-np.pi, high=np.pi
-    )
-    heading_after = circmean(
-        heading[idx : min(len(heading), idx + window)], low=-np.pi, high=np.pi
-    )
 
+    # convert indices_before and indices_after to np.array if not already
+    indices_before = np.array(indices_before)
+    indices_after = np.array(indices_after)
+
+    # check if indices are within range, raise error if not
+    if np.any(indices_before < 0) or np.any(indices_before >= len(heading)):
+        raise ValueError("indices_before out of range")
+
+    # calculate the circular mean of the headings
+    heading_before = circmean(heading[indices_before], low=-np.pi, high=np.pi)
+    heading_after = circmean(heading[indices_after], low=-np.pi, high=np.pi)
+
+    # calculate the difference in heading
     heading_difference = np.arctan2(
         np.sin(heading_after - heading_before), np.cos(heading_after - heading_before)
     )

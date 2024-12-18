@@ -1,143 +1,30 @@
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.stats import circmean
 from tqdm import tqdm
-import inspect
+
+from .helpers import dict_list_to_numpy
 
 from .trajectory import (
     calculate_angular_velocity,
+    calculate_heading_diff,
     calculate_linear_velocity,
     detect_saccades,
-    calculate_heading_diff,
 )
-
-from scipy.stats import circmean
-
-# Constants for trajectory analysis
-MAX_RADIUS = 0.23  # Maximum allowed radius for valid trajectories
-XY_RANGE = [-0.23, 0.23]
-Z_RANGE = [0.05, 0.3]  # Valid range for z-coordinate [min, max]
-HEADING_DIFF_WINDOW = 10  # Window size for heading difference calculation
+from .types import (
+    AnalysisParamType,
+    LoomingAnalysis,
+    OptoAnalysis,
+    ParameterManager,
+    SaccadeParams,
+    TrajectoryParams,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-
-# @dataclass
-# class TrajectoryAnalysisResults:
-#     """Results from trajectory analysis.
-
-#     Contains all possible metrics that could be returned from trajectory analysis functions.
-#     Not all fields will be populated by every analysis function.
-
-#     Attributes:
-#         angular_velocity: Array of angular velocities (n_samples, n_timepoints)
-#         linear_velocity: Array of linear velocities (n_samples, n_timepoints)
-#         xyz: Array of positions (n_samples, n_timepoints, 3)
-#         heading_diff: Array of heading differences (n_samples, n_timepoints)
-#         saccade_type: Array of saccade type labels (n_samples,)
-#         sham: Array of boolean sham indicators (n_samples,)
-#         frames_in_opto_radius: Array of frame counts within opto radius (n_samples,)
-#     """
-
-#     angular_velocity: np.ndarray
-#     linear_velocity: np.ndarray
-#     xyz: np.ndarray
-#     heading_diff: np.ndarray
-#     saccade_type: np.ndarray | None = None  # Optional fields that aren't always present
-#     sham: np.ndarray | None = None
-#     frames_in_opto_radius: np.ndarray | None = None
-
-#     def __post_init__(self):
-#         """Validate array shapes after initialization."""
-#         n_samples = len(self.angular_velocity)
-#         assert len(self.linear_velocity) == n_samples, "Mismatched sample counts"
-#         assert len(self.xyz) == n_samples, "Mismatched sample counts"
-#         assert len(self.heading_diff) == n_samples, "Mismatched sample counts"
-
-#         if self.saccade_type is not None:
-#             assert len(self.saccade_type) == n_samples, "Mismatched sample counts"
-#         if self.sham is not None:
-#             assert len(self.sham) == n_samples, "Mismatched sample counts"
-#         if self.frames_in_opto_radius is not None:
-#             assert (
-#                 len(self.frames_in_opto_radius) == n_samples
-#             ), "Mismatched sample counts"
-
-
-@dataclass
-class OptoAnalysis:
-    """Parameters for Optogenetic trajectory analysis.
-
-    Attributes:
-        pre_frames (int): Number of frames to analyze before event
-        post_frames (int): Number of frames to analyze after event
-        min_frames (int): Minimum number of frames required for analysis
-        opto_radius (float): Radius threshold for optogenetic stimulation
-        opto_duration (int): Duration of optogenetic stimulation in frames
-    """
-
-    pre_frames: int = 50
-    post_frames: int = 100
-    min_frames: int = 150
-    opto_radius: float = 0.025
-    opto_duration: int = 30
-
-    @classmethod
-    def from_dict(cls, env):
-        return cls(
-            **{k: v for k, v in env.items() if k in inspect.signature(cls).parameters}
-        )
-
-
-@dataclass
-class LoomingAnalysis:
-    """Parameters for Optogenetic trajectory analysis.
-
-    Attributes:
-        pre_frames (int): Number of frames to analyze before event
-        post_frames (int): Number of frames to analyze after event
-        min_frames (int): Minimum number of frames required for analysis
-        opto_radius (float): Radius threshold for optogenetic stimulation
-        opto_duration (int): Duration of optogenetic stimulation in frames
-    """
-
-    pre_frames: int = 50
-    post_frames: int = 100
-    min_frames: int = 150
-    looming_duration: int = 30
-    response_delay: int = 20
-
-    @classmethod
-    def from_dict(cls, env):
-        return cls(
-            **{k: v for k, v in env.items() if k in inspect.signature(cls).parameters}
-        )
-
-
-@dataclass
-class SaccadeParams:
-    """Parameters for saccade detection.
-
-    Attributes:
-        threshold (float): Angular velocity threshold for saccade detection
-        distance (int): Minimum distance between saccades in frames
-    """
-
-    pre_frames: int = 50
-    post_frames: int = 50
-    min_trajectory_length: int = 150
-    threshold: float = np.deg2rad(300)
-    distance: int = 10
-
-    @classmethod
-    def from_dict(cls, env):
-        return cls(
-            **{k: v for k, v in env.items() if k in inspect.signature(cls).parameters}
-        )
 
 
 def get_opto_data(
@@ -145,16 +32,32 @@ def get_opto_data(
     opto: pd.DataFrame,
     opto_params: dict | OptoAnalysis | None = None,
     saccade_params: dict | SaccadeParams | None = None,
+    trajectory_params: dict | TrajectoryParams | None = None,
 ) -> dict:
-    if isinstance(opto_params, dict):
-        looming_params = LoomingAnalysis.from_dict(opto_params)
-    elif looming_params is None:
-        looming_params = LoomingAnalysis()
+    """Analyze optogenetic stimulation data with parameter validation.
 
-    if isinstance(saccade_params, dict):
-        saccade_params = SaccadeParams.from_dict(saccade_params)
-    elif saccade_params is None:
-        saccade_params = SaccadeParams()
+    Args:
+        df: DataFrame containing trajectory data
+        opto: DataFrame containing optogenetic stimulation events
+        opto_params: Optogenetic analysis parameters
+        saccade_params: Saccade detection parameters
+        trajectory_params: Trajectory analysis parameters
+
+    Returns:
+        dict: Dictionary containing analyzed data arrays
+    """
+    # Initialize parameters using ParameterManager
+    params = {
+        "opto": ParameterManager.initialize_params(
+            AnalysisParamType.OPTOGENETICS, opto_params
+        ),
+        "saccade": ParameterManager.initialize_params(
+            AnalysisParamType.SACCADE, saccade_params
+        ),
+        "trajectory": ParameterManager.initialize_params(
+            AnalysisParamType.TRAJECTORY, trajectory_params
+        ),
+    }
 
     opto_data = {
         "angular_velocity": [],
@@ -167,6 +70,7 @@ def get_opto_data(
         "frames_in_opto_radius": [],
         "sham": [],
         "reaction_delay": [],
+        "responsive": [],
     }
 
     for _, row in opto.iterrows():
@@ -175,7 +79,7 @@ def get_opto_data(
         else:
             grp = df[df["obj_id"] == row["obj_id"]]
 
-        if len(grp) < opto_params.min_frames:
+        if len(grp) < params["opto"].min_frames:
             logger.debug(f"Skipping trajectory with {len(grp)} frames")
             continue
 
@@ -185,10 +89,9 @@ def get_opto_data(
             logger.debug("Skipping trajectory with no opto frame")
             continue
 
-        if (
-            opto_idx - opto_params.pre_frames < 0
-            or opto_idx + opto_params.post_frames >= len(grp)
-        ):
+        if opto_idx - params["opto"].pre_frames < 0 or opto_idx + params[
+            "opto"
+        ].post_frames >= len(grp):
             logger.debug("Skipping trajectory with insufficient frames")
             continue
 
@@ -201,13 +104,13 @@ def get_opto_data(
         # calculate how many frames in opto radius
         radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
         frames_in_opto_radius = np.sum(
-            radius[opto_idx : opto_idx + opto_params.opto_duration]
-            < opto_params.opto_radius
+            radius[opto_idx : opto_idx + params["opto"].opto_duration]
+            < params["opto"].opto_radius
         )
 
         # get opto range
         opto_range = range(
-            opto_idx - opto_params.pre_frames, opto_idx + opto_params.post_frames
+            opto_idx - params["opto"].pre_frames, opto_idx + params["opto"].post_frames
         )
 
         opto_data["angular_velocity"].append(angular_velocity[opto_range])
@@ -215,10 +118,16 @@ def get_opto_data(
         opto_data["xyz"].append(grp[["x", "y", "z"]].values[opto_range])
         opto_data["frames_in_opto_radius"].append(frames_in_opto_radius)
 
-        # calculate heading difference
-        # TODO: CHANGE TO ACCEPT START AND END INDEX (CALCULATE FROM OPTO_IDX-HEADING_DIFF_WINDOW TO OPTO_IDX+HEADING_DIFF_WINDOW+OPTO_DURATION)
+        # calculate heading difference using trajectory params
         heading_difference = calculate_heading_diff(
-            heading, opto_idx, HEADING_DIFF_WINDOW
+            heading,
+            range(opto_idx - params["trajectory"].heading_diff_window, opto_idx),
+            range(
+                opto_idx,
+                opto_idx
+                + params["opto"].opto_duration
+                + params["trajectory"].heading_diff_window,
+            ),
         )
 
         opto_data["heading_difference"].append(heading_difference)
@@ -226,46 +135,70 @@ def get_opto_data(
 
         # find all peaks
         peaks = detect_saccades(
-            angular_velocity, saccade_params.threshold, saccade_params.distance
+            angular_velocity, params["saccade"].threshold, params["saccade"].distance
         )
         opto_peak = [
             peak
             for peak in peaks
-            if opto_idx < peak < opto_idx + opto_params.opto_duration
+            if opto_idx < peak < opto_idx + params["opto"].opto_duration
         ]
+
+        # initialize peak centered data
+        peak_centered_angular_velocity = np.full(
+            params["opto"].pre_frames + params["opto"].post_frames, np.nan
+        )
+        peak_centered_linear_velocity = np.full(
+            params["opto"].pre_frames + params["opto"].post_frames, np.nan
+        )
+        peak_centered_heading_difference = np.nan
+        reaction_delay = np.nan
+        responsive = False
+
         if len(opto_peak) == 0:
-            opto_data["angular_velocity_peak_centered"].append(np.nan)
-            opto_data["linear_velocity_peak_centered"].append(np.nan)
-            opto_data["heading_difference_peak_centered"].append(np.nan)
+            logger.debug("No peak found")
+            continue
+        # if multiple peaks found, append the first peak
+        elif opto_peak[0] - params["saccade"].pre_frames < 0 or opto_peak[0] + params[
+            "saccade"
+        ].post_frames >= len(grp):
+            logger.debug("Skipping peak with insufficient frames")
+            continue
         else:
             opto_peak = opto_peak[0]  # only take the first peak
+
+            # get peak centered data
             peak_centered_angular_velocity = angular_velocity[
-                opto_peak - opto_params.pre_frames : opto_peak + opto_params.post_frames
+                opto_peak - params["saccade"].pre_frames : opto_peak
+                + params["saccade"].post_frames
             ]
             peak_centered_linear_velocity = linear_velocity[
-                opto_peak - opto_params.pre_frames : opto_peak + opto_params.post_frames
+                opto_peak - params["saccade"].pre_frames : opto_peak
+                + params["saccade"].post_frames
             ]
 
+            # get peak centered heading difference
             peak_centered_heading_difference = calculate_heading_diff(
-                heading, opto_peak, HEADING_DIFF_WINDOW
-            )
-
-            opto_data["angular_velocity_peak_centered"].append(
-                peak_centered_angular_velocity
-            )
-            opto_data["linear_velocity_peak_centered"].append(
-                peak_centered_linear_velocity
-            )
-            opto_data["heading_difference_peak_centered"].append(
-                peak_centered_heading_difference
+                heading,
+                range(opto_peak - params["trajectory"].heading_diff_window, opto_peak),
+                range(opto_peak, opto_peak + params["trajectory"].heading_diff_window),
             )
 
             # calculate reaction delay
             reaction_delay = opto_peak - opto_idx
-            opto_data["reaction_delay"].append(reaction_delay)
+            responsive = True
 
-    # convert to numpy arrays
-    return {k: np.array(v) for k, v in opto_data.items()}
+        # append peak centered data
+        opto_data["angular_velocity_peak_centered"].append(
+            peak_centered_angular_velocity
+        )
+        opto_data["linear_velocity_peak_centered"].append(peak_centered_linear_velocity)
+        opto_data["heading_difference_peak_centered"].append(
+            peak_centered_heading_difference
+        )
+        opto_data["reaction_delay"].append(reaction_delay)
+        opto_data["responsive"].append(responsive)
+
+    return dict_list_to_numpy(opto_data)
 
 
 def get_stim_data(
@@ -273,16 +206,34 @@ def get_stim_data(
     stim: pd.DataFrame,
     looming_params: dict | LoomingAnalysis | None = None,
     saccade_params: dict | SaccadeParams | None = None,
+    trajectory_params: dict
+    | TrajectoryParams
+    | None = None,  # Added for heading_diff_window
 ) -> dict:
-    if isinstance(looming_params, dict):
-        looming_params = LoomingAnalysis.from_dict(looming_params)
-    elif looming_params is None:
-        looming_params = LoomingAnalysis()
+    """Analyze looming stimulus data with parameter validation.
 
-    if isinstance(saccade_params, dict):
-        saccade_params = SaccadeParams.from_dict(saccade_params)
-    elif saccade_params is None:
-        saccade_params = SaccadeParams()
+    Args:
+        df: DataFrame containing trajectory data
+        stim: DataFrame containing stimulus events
+        looming_params: Looming stimulus analysis parameters
+        saccade_params: Saccade detection parameters
+        trajectory_params: Trajectory analysis parameters
+
+    Returns:
+        dict: Dictionary containing analyzed data arrays
+    """
+    # Initialize parameters using ParameterManager
+    params = {
+        "looming": ParameterManager.initialize_params(
+            AnalysisParamType.LOOMING, looming_params
+        ),
+        "saccade": ParameterManager.initialize_params(
+            AnalysisParamType.SACCADE, saccade_params
+        ),
+        "trajectory": ParameterManager.initialize_params(
+            AnalysisParamType.TRAJECTORY, trajectory_params
+        ),
+    }
 
     stim_data = {
         "angular_velocity": [],
@@ -293,6 +244,7 @@ def get_stim_data(
         "heading_difference": [],
         "heading_difference_peak_centered": [],
         "reaction_delay": [],
+        "responsive": [],
     }
 
     for _, row in stim.iterrows():
@@ -303,20 +255,19 @@ def get_stim_data(
         else:
             grp = df[df["obj_id"] == row["obj_id"]]
 
-        if len(grp) < looming_params.min_frames:
+        if len(grp) < params["looming"].min_frames:
             logger.debug(f"Skipping trajectory with {len(grp)} frames")
             continue
 
         try:
             stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
         except IndexError:
-            logger.debug("Skipping trajectory with no opto frame")
+            logger.debug("Skipping trajectory with no stimulus frame")
             continue
 
-        if (
-            stim_idx - looming_params.pre_frames < 0
-            or stim_idx + looming_params.post_frames >= len(grp)
-        ):
+        if stim_idx - params["looming"].pre_frames < 0 or stim_idx + params[
+            "looming"
+        ].post_frames >= len(grp):
             logger.debug("Skipping trajectory with insufficient frames")
             continue
 
@@ -326,108 +277,125 @@ def get_stim_data(
         )
         linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
 
-        # get opto range
+        # get stimulus range
         stim_range = range(
-            stim_idx - looming_params.pre_frames, stim_idx + looming_params.post_frames
+            stim_idx - params["looming"].pre_frames,
+            stim_idx + params["looming"].post_frames,
         )
-
         stim_data["angular_velocity"].append(angular_velocity[stim_range])
         stim_data["linear_velocity"].append(linear_velocity[stim_range])
         stim_data["xyz"].append(grp[["x", "y", "z"]].values[stim_range])
 
         # calculate heading difference
-        heading_before = circmean(
-            heading[stim_idx - HEADING_DIFF_WINDOW : stim_idx], low=-np.pi, high=np.pi
-        )
-        heading_after = circmean(
-            heading[
-                stim_idx + looming_params.looming_duration : stim_idx
-                + looming_params.looming_duration
-                + HEADING_DIFF_WINDOW
-            ],
-            low=-np.pi,
-            high=np.pi,
+        heading_difference = calculate_heading_diff(
+            heading,
+            range(stim_idx, stim_idx + params["looming"].looming_duration),
+            range(
+                stim_idx + params["looming"].looming_duration,
+                stim_idx
+                + params["looming"].looming_duration
+                + params["trajectory"].heading_diff_window,
+            ),
         )
 
-        heading_difference = np.arctan2(
-            np.sin(heading_after - heading_before),
-            np.cos(heading_after - heading_before),
-        )
-        heading_difference = calculate_heading_diff(
-            heading, stim_idx, HEADING_DIFF_WINDOW
-        )
         stim_data["heading_difference"].append(heading_difference)
 
         # find all peaks
         peaks = detect_saccades(
-            angular_velocity, saccade_params.threshold, saccade_params.distance
+            angular_velocity, params["saccade"].threshold, params["saccade"].distance
         )
         stim_peak = [
             peak
             for peak in peaks
             if stim_idx
             < peak
-            < stim_idx + looming_params.looming_duration + looming_params.response_delay
+            < stim_idx
+            + params["looming"].looming_duration
+            + params["looming"].response_delay
         ]
 
-        # if no peaks found, append nan
-        if len(stim_peak) == 0:
-            stim_data["angular_velocity_peak_centered"].append(np.nan)
-            stim_data["linear_velocity_peak_centered"].append(np.nan)
-            stim_data["heading_difference_peak_centered"].append(np.nan)
+        # initialize peak centered data
+        peak_centered_angular_velocity = np.full(
+            params["looming"].pre_frames + params["looming"].post_frames, np.nan
+        )
+        peak_centered_linear_velocity = np.full(
+            params["looming"].pre_frames + params["looming"].post_frames, np.nan
+        )
+        peak_centered_heading_difference = np.nan
+        reaction_delay = np.nan
+        responsive = False
 
+        if len(stim_peak) == 0:
+            logger.debug("No peak found")
+            continue
         # if multiple peaks found, append the first peak
+        elif stim_peak[0] - params["looming"].pre_frames < 0 or stim_peak[0] + params[
+            "looming"
+        ].post_frames >= len(grp):
+            logger.debug("Skipping peak with insufficient frames")
+            continue
         else:
             stim_peak = stim_peak[0]  # only take the first peak
 
-            if (
-                stim_peak - looming_params.pre_frames < 0
-                or stim_peak + looming_params.post_frames >= len(grp)
-            ):
-                logger.debug("Skipping peak with insufficient frames")
-                continue
-
             # get peak centered data
             peak_centered_angular_velocity = angular_velocity[
-                stim_peak - looming_params.pre_frames : stim_peak
-                + looming_params.post_frames
+                stim_peak - params["looming"].pre_frames : stim_peak
+                + params["looming"].post_frames
             ]
             peak_centered_linear_velocity = linear_velocity[
-                stim_peak - looming_params.pre_frames : stim_peak
-                + looming_params.post_frames
+                stim_peak - params["looming"].pre_frames : stim_peak
+                + params["looming"].post_frames
             ]
 
             # get peak centered heading difference
             peak_centered_heading_difference = calculate_heading_diff(
-                heading, stim_peak, HEADING_DIFF_WINDOW
-            )
-
-            # append peak centered data
-            stim_data["angular_velocity_peak_centered"].append(
-                peak_centered_angular_velocity
-            )
-            stim_data["linear_velocity_peak_centered"].append(
-                peak_centered_linear_velocity
-            )
-            stim_data["heading_difference_peak_centered"].append(
-                peak_centered_heading_difference
+                heading,
+                range(stim_peak - params["trajectory"].heading_diff_window, stim_peak),
+                range(stim_peak, stim_peak + params["trajectory"].heading_diff_window),
             )
 
             # calculate reaction delay
             reaction_delay = stim_peak - stim_idx
-            stim_data["reaction_delay"].append(reaction_delay)
+            responsive = True
 
-    # convert to numpy arrays
-    return {k: np.array(v) for k, v in stim_data.items()}
+        # append peak centered data
+        stim_data["angular_velocity_peak_centered"].append(
+            peak_centered_angular_velocity
+        )
+        stim_data["linear_velocity_peak_centered"].append(peak_centered_linear_velocity)
+        stim_data["heading_difference_peak_centered"].append(
+            peak_centered_heading_difference
+        )
+        stim_data["reaction_delay"].append(reaction_delay)
+        stim_data["responsive"].append(responsive)
+
+    return dict_list_to_numpy(stim_data)
 
 
 def get_all_saccades(
-    df: pd.DataFrame, params: dict | SaccadeParams | None = None
+    df: pd.DataFrame,
+    saccade_params: dict | SaccadeParams | None = None,
+    trajectory_params: dict | TrajectoryParams | None = None,
 ) -> dict:
-    if isinstance(params, dict):
-        params = SaccadeParams.from_dict(params)
-    elif params is None:
-        params = SaccadeParams()
+    """Analyze all saccades in trajectory data with parameter validation.
+
+    Args:
+        df: DataFrame containing trajectory data
+        saccade_params: Saccade detection parameters
+        trajectory_params: Trajectory analysis parameters including spatial bounds
+
+    Returns:
+        dict: Dictionary containing analyzed saccade data arrays
+    """
+    # Initialize parameters using ParameterManager
+    params = {
+        "saccade": ParameterManager.initialize_params(
+            AnalysisParamType.SACCADE, saccade_params
+        ),
+        "trajectory": ParameterManager.initialize_params(
+            AnalysisParamType.TRAJECTORY, trajectory_params
+        ),
+    }
 
     saccade_data = {
         "angular_velocity": [],
@@ -446,15 +414,27 @@ def get_all_saccades(
         grouped_data, desc="Processing trajectories", total=len(grouped_data)
     ):
         # check length
-        if len(grp) < params.min_trajectory_length:
+        if len(grp) < params["saccade"].min_trajectory_length:
             logger.debug(f"Skipping trajectory with {len(grp)} frames")
             continue
 
-        # check median
+        # check median using trajectory params
         if (
-            not (XY_RANGE[0] < grp.x.median() < XY_RANGE[1])
-            and (XY_RANGE[0] < grp.y.median() < XY_RANGE[1])
-            and (Z_RANGE[0] < grp.z.median() < Z_RANGE[1])
+            not (
+                params["trajectory"].xy_range[0]
+                < grp.x.median()
+                < params["trajectory"].xy_range[1]
+            )
+            and (
+                params["trajectory"].xy_range[0]
+                < grp.y.median()
+                < params["trajectory"].xy_range[1]
+            )
+            and (
+                params["trajectory"].z_range[0]
+                < grp.z.median()
+                < params["trajectory"].z_range[1]
+            )
         ):
             logger.debug("Skipping trajectory outside of valid median range")
             continue
@@ -466,43 +446,64 @@ def get_all_saccades(
         linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
 
         # detect saccades
-        saccades = detect_saccades(angular_velocity, params.threshold, params.distance)
+        saccades = detect_saccades(
+            angular_velocity, params["saccade"].threshold, params["saccade"].distance
+        )
         logger.debug(
-            f"Detected {len(saccades)} saccades for obj_id {grp.obj_id.iloc[0]}, exp_num {grp.exp_num.iloc[0]}"
+            f"Detected {len(saccades)} saccades for obj_id {grp.obj_id.iloc[0]}"
+            + (f", exp_num {grp.exp_num.iloc[0]}" if "exp_num" in grp.columns else "")
         )
 
         # loop and extract saccade traces
         for sac in saccades:
             # check if saccade has enough frames
-            if sac - params.pre_frames < 0 or sac + params.post_frames >= len(grp):
+            if sac - params["saccade"].pre_frames < 0 or sac + params[
+                "saccade"
+            ].post_frames >= len(grp):
                 logger.debug("Skipping saccade with insufficient frames")
                 continue
 
-            # check if the fly is flying
+            # check if the fly is within spatial bounds
             if not (
-                (XY_RANGE[0] < grp.x.iloc[sac] < XY_RANGE[1])
-                and (XY_RANGE[0] < grp.y.iloc[sac] < XY_RANGE[1])
-                and (Z_RANGE[0] < grp.z.iloc[sac] < Z_RANGE[1])
+                (
+                    params["trajectory"].xy_range[0]
+                    < grp.x.iloc[sac]
+                    < params["trajectory"].xy_range[1]
+                )
+                and (
+                    params["trajectory"].xy_range[0]
+                    < grp.y.iloc[sac]
+                    < params["trajectory"].xy_range[1]
+                )
+                and (
+                    params["trajectory"].z_range[0]
+                    < grp.z.iloc[sac]
+                    < params["trajectory"].z_range[1]
+                )
             ):
                 continue
 
             # get saccade traces
             saccade_angular_velocity = angular_velocity[
-                sac - params.pre_frames : sac + params.post_frames
+                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
             ]
             saccade_linear_velocity = linear_velocity[
-                sac - params.pre_frames : sac + params.post_frames
+                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
             ]
             saccade_xyz = grp[["x", "y", "z"]].values[
-                sac - params.pre_frames : sac + params.post_frames
+                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
             ]
 
-            # calculate heading difference
+            # calculate heading difference using trajectory params
             heading_before = circmean(
-                heading[sac - HEADING_DIFF_WINDOW : sac], low=-np.pi, high=np.pi
+                heading[sac - params["trajectory"].heading_diff_window : sac],
+                low=-np.pi,
+                high=np.pi,
             )
             heading_after = circmean(
-                heading[sac : sac + HEADING_DIFF_WINDOW], low=-np.pi, high=np.pi
+                heading[sac : sac + params["trajectory"].heading_diff_window],
+                low=-np.pi,
+                high=np.pi,
             )
             heading_difference = np.arctan2(
                 np.sin(heading_after - heading_before),
@@ -514,4 +515,4 @@ def get_all_saccades(
             saccade_data["xyz"].append(saccade_xyz)
             saccade_data["heading_difference"].append(heading_difference)
 
-    return {k: np.array(v) for k, v in saccade_data.items()}
+    return dict_list_to_numpy(saccade_data)

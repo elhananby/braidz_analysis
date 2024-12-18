@@ -141,7 +141,7 @@ wheels = [
 
 [[package]]
 name = "braidz-analysis"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "cvxpy" },
@@ -181,9 +181,6 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "braidz-analysis", editable = "." }]
 
 [[package]]
 name = "build"
