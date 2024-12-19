@@ -84,6 +84,7 @@ class SaccadeParams:
     min_trajectory_length: int = 150
     threshold: float = np.deg2rad(300)
     distance: int = 10
+    max_angular_velocity: float = np.deg2rad(3000)
 
     @classmethod
     def from_dict(cls, env):

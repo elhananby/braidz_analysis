@@ -450,6 +450,78 @@ def filter_trajectories(
     else:
         return df[df[group_cols[0]].isin(valid_groups)]
 
+def apply_hysteresis_filter(linear_velocity, high_threshold=0.1, low_threshold=0.001, max_gap=100):
+    """
+    Apply hysteresis filtering to identify flight bouts, combining bouts separated by small gaps.
+    
+    This function uses a two-stage approach:
+    1. First, it identifies initial flight bouts using hysteresis thresholding
+    2. Then, it looks for short gaps between bouts and combines bouts that are close together
+    
+    Args:
+        linear_velocity: Array of linear velocities over time
+        high_threshold: Velocity threshold that must be exceeded to start a flight bout
+        low_threshold: Velocity threshold that must be crossed to end a flight bout
+        max_gap: Maximum number of frames between bouts to consider them as one continuous bout
+        
+    Returns:
+        list[np.ndarray]: List of arrays containing indices for each flight bout
+    """
+    import scipy
+    
+    # Smooth the velocity data to reduce noise
+    smoothed_velocity = scipy.signal.savgol_filter(
+        linear_velocity, 
+        window_length=21,
+        polyorder=3
+    )
+    
+    # First pass: identify initial bout segments
+    initial_segments = []
+    currently_flying = False
+    current_start = None
+    
+    # Identify initial bout segments using hysteresis
+    for i in range(len(smoothed_velocity)):
+        if currently_flying:
+            if smoothed_velocity[i] < low_threshold:
+                currently_flying = False
+                initial_segments.append(np.arange(current_start, i))
+        else:
+            if smoothed_velocity[i] > high_threshold:
+                currently_flying = True
+                current_start = i
+    
+    # Handle case where trajectory ends during flight
+    if currently_flying:
+        initial_segments.append(np.arange(current_start, len(smoothed_velocity)))
+    
+    # If we found no segments, return empty list
+    if not initial_segments:
+        return []
+    
+    # Second pass: combine segments that have small gaps between them
+    combined_segments = []
+    current_segment = initial_segments[0]
+    
+    # Look at each pair of consecutive segments
+    for next_segment in initial_segments[1:]:
+        # Calculate the gap between current segment end and next segment start
+        gap = next_segment[0] - current_segment[-1] - 1
+        
+        if gap <= max_gap:
+            # If the gap is small enough, create a new combined segment that includes
+            # both segments and the gap between them
+            current_segment = np.arange(current_segment[0], next_segment[-1] + 1)
+        else:
+            # If the gap is too large, store the current segment and start a new one
+            combined_segments.append(current_segment)
+            current_segment = next_segment
+    
+    # Don't forget to add the last segment
+    combined_segments.append(current_segment)
+    
+    return combined_segments
 
 def get_all_saccades(
     df: pd.DataFrame,
@@ -486,6 +558,8 @@ def get_all_saccades(
         "heading_difference": [],
         "ISI": [],
         "saccade_per_second": [],
+        "trajectory_duration": [],
+        "num_of_saccades": [],
     }
 
     # Group the filtered data
@@ -498,75 +572,94 @@ def get_all_saccades(
     for _, grp in tqdm(
         grouped_data, desc="Processing trajectories", total=len(grouped_data)
     ):
-        # get angular and linear velocity
+        # Calculate velocities for the entire trajectory
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
         )
         linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
+        
+        # Normalize linear velocity and get flight bouts
+        normalized_linear_velocity = linear_velocity / np.max(linear_velocity)
+        flight_bouts = apply_hysteresis_filter(normalized_linear_velocity)
 
-        # detect saccades
-        saccades = detect_saccades(
-            angular_velocity, params["saccade"].threshold, params["saccade"].distance
-        )
-        logger.debug(
-            f"Detected {len(saccades)} saccades for obj_id {grp.obj_id.iloc[0]}"
-            + (f", exp_num {grp.exp_num.iloc[0]}" if "exp_num" in grp.columns else "")
-        )
-
-        good_saccades = []
-        # loop and extract saccade traces
-        for sac in saccades:
-            # check if saccade has enough frames
-            if sac - params["saccade"].pre_frames < 0 or sac + params[
-                "saccade"
-            ].post_frames >= len(grp):
-                logger.debug("Skipping saccade with insufficient frames")
-                continue
-
-            # check if the fly is within spatial bounds at saccade time
-            if not (
-                (
-                    np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2)
-                    < params["trajectory"].max_radius
-                )
-                and (
-                    params["trajectory"].z_range[0]
-                    < grp.z.iloc[sac]
-                    < params["trajectory"].z_range[1]
-                )
-            ):
-                continue
-
-            # get saccade traces
-            saccade_angular_velocity = angular_velocity[
-                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
-            ]
-            saccade_linear_velocity = linear_velocity[
-                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
-            ]
-            saccade_xyz = grp[["x", "y", "z"]].values[
-                sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
-            ]
-
-            heading_difference = calculate_heading_diff(
-                heading,
-                range(sac - params["trajectory"].heading_diff_window, sac),
-                range(sac, sac + params["trajectory"].heading_diff_window),
+        # Process each flight bout separately
+        for bout_indices in flight_bouts:
+            # Detect saccades within this bout
+            bout_angular_velocity = angular_velocity[bout_indices]
+            bout_saccades = detect_saccades(
+                bout_angular_velocity, 
+                params["saccade"].threshold, 
+                params["saccade"].distance
             )
+            
+            # Convert bout-relative saccade indices to trajectory-relative indices (so we can index into the full angular_velocity and linear_velocity)
+            trajectory_saccades = bout_indices[bout_saccades]
+            
+            good_saccades = []
+            # Process each saccade in this bout
+            for sac in trajectory_saccades:
+                # Check if we have enough frames before and after the saccade
+                if sac - params["saccade"].pre_frames < 0 or sac + params[
+                    "saccade"
+                ].post_frames >= len(grp):
+                    logger.debug("Skipping saccade with insufficient frames")
+                    continue
 
-            saccade_data["angular_velocity"].append(saccade_angular_velocity)
-            saccade_data["linear_velocity"].append(saccade_linear_velocity)
-            saccade_data["xyz"].append(saccade_xyz)
-            saccade_data["heading_difference"].append(heading_difference)
-            good_saccades.append(sac)
+                # Check spatial bounds at saccade time
+                if not (
+                    (
+                        np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2)
+                        < params["trajectory"].max_radius
+                    )
+                    and (
+                        params["trajectory"].z_range[0]
+                        < grp.z.iloc[sac]
+                        < params["trajectory"].z_range[1]
+                    )
+                ):
+                    continue
 
-        if len(good_saccades) < 2:
-            saccade_data["ISI"].append(np.nan)
-            saccade_data["saccade_per_second"].append(np.nan)
-        else:
-            saccade_data["ISI"].append(np.nanmean(np.diff(good_saccades)))
-            saccade_data["saccade_per_second"].append(
-                len(good_saccades) / (grp.timestamp.iloc[-1] - grp.timestamp.iloc[0])
-            )
+                # Extract saccade traces
+                saccade_angular_velocity = angular_velocity[
+                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                ]
+                saccade_linear_velocity = linear_velocity[
+                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                ]
+                saccade_xyz = grp[["x", "y", "z"]].values[
+                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                ]
+
+                heading_difference = calculate_heading_diff(
+                    heading,
+                    range(sac - params["trajectory"].heading_diff_window, sac),
+                    range(sac, sac + params["trajectory"].heading_diff_window),
+                )
+
+                # Store saccade data
+                saccade_data["angular_velocity"].append(saccade_angular_velocity)
+                saccade_data["linear_velocity"].append(saccade_linear_velocity)
+                saccade_data["xyz"].append(saccade_xyz)
+                saccade_data["heading_difference"].append(heading_difference)
+                good_saccades.append(sac)
+
+            # Calculate bout-specific metrics
+            bout_duration = grp.timestamp.iloc[bout_indices[-1]] - grp.timestamp.iloc[bout_indices[0]]
+            
+            if len(good_saccades) < 2:
+                saccade_data["ISI"].append(np.nan)
+                saccade_data["saccade_per_second"].append(np.nan)
+            else:
+                isis = np.diff(good_saccades)
+
+                # remove any isis less than 1 and bigger than 500
+                isis = isis[(isis > 1) & (isis < 500)]
+                saccade_data["ISI"].append(np.nanmean(isis))
+                saccade_data["saccade_per_second"].append(
+                    len(good_saccades) / bout_duration
+                )
+            
+            saccade_data["num_of_saccades"].append(len(good_saccades))
+            saccade_data["trajectory_duration"].append(bout_duration)
 
     return dict_list_to_numpy(saccade_data)
