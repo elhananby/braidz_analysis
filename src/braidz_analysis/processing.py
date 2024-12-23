@@ -2,7 +2,6 @@ import logging
 
 import numpy as np
 import pandas as pd
-from scipy.stats import circmean
 from tqdm import tqdm
 
 from .helpers import dict_list_to_numpy
@@ -75,7 +74,9 @@ def get_opto_data(
 
     for _, row in opto.iterrows():
         if "exp_num" in row:
-            grp = df[df["obj_id"] == row["obj_id"] and df["exp_num"] == row["exp_num"]]
+            grp = df[
+                (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
+            ]
         else:
             grp = df[df["obj_id"] == row["obj_id"]]
 
@@ -450,37 +451,38 @@ def filter_trajectories(
     else:
         return df[df[group_cols[0]].isin(valid_groups)]
 
-def apply_hysteresis_filter(linear_velocity, high_threshold=0.1, low_threshold=0.001, max_gap=100):
+
+def apply_hysteresis_filter(
+    linear_velocity, high_threshold=0.1, low_threshold=0.001, max_gap=100
+):
     """
     Apply hysteresis filtering to identify flight bouts, combining bouts separated by small gaps.
-    
+
     This function uses a two-stage approach:
     1. First, it identifies initial flight bouts using hysteresis thresholding
     2. Then, it looks for short gaps between bouts and combines bouts that are close together
-    
+
     Args:
         linear_velocity: Array of linear velocities over time
         high_threshold: Velocity threshold that must be exceeded to start a flight bout
         low_threshold: Velocity threshold that must be crossed to end a flight bout
         max_gap: Maximum number of frames between bouts to consider them as one continuous bout
-        
+
     Returns:
         list[np.ndarray]: List of arrays containing indices for each flight bout
     """
     import scipy
-    
+
     # Smooth the velocity data to reduce noise
     smoothed_velocity = scipy.signal.savgol_filter(
-        linear_velocity, 
-        window_length=21,
-        polyorder=3
+        linear_velocity, window_length=21, polyorder=3
     )
-    
+
     # First pass: identify initial bout segments
     initial_segments = []
     currently_flying = False
     current_start = None
-    
+
     # Identify initial bout segments using hysteresis
     for i in range(len(smoothed_velocity)):
         if currently_flying:
@@ -491,24 +493,24 @@ def apply_hysteresis_filter(linear_velocity, high_threshold=0.1, low_threshold=0
             if smoothed_velocity[i] > high_threshold:
                 currently_flying = True
                 current_start = i
-    
+
     # Handle case where trajectory ends during flight
     if currently_flying:
         initial_segments.append(np.arange(current_start, len(smoothed_velocity)))
-    
+
     # If we found no segments, return empty list
     if not initial_segments:
         return []
-    
+
     # Second pass: combine segments that have small gaps between them
     combined_segments = []
     current_segment = initial_segments[0]
-    
+
     # Look at each pair of consecutive segments
     for next_segment in initial_segments[1:]:
         # Calculate the gap between current segment end and next segment start
         gap = next_segment[0] - current_segment[-1] - 1
-        
+
         if gap <= max_gap:
             # If the gap is small enough, create a new combined segment that includes
             # both segments and the gap between them
@@ -517,11 +519,12 @@ def apply_hysteresis_filter(linear_velocity, high_threshold=0.1, low_threshold=0
             # If the gap is too large, store the current segment and start a new one
             combined_segments.append(current_segment)
             current_segment = next_segment
-    
+
     # Don't forget to add the last segment
     combined_segments.append(current_segment)
-    
+
     return combined_segments
+
 
 def get_all_saccades(
     df: pd.DataFrame,
@@ -577,7 +580,7 @@ def get_all_saccades(
             grp.xvel.values, grp.yvel.values
         )
         linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
-        
+
         # Normalize linear velocity and get flight bouts
         normalized_linear_velocity = linear_velocity / np.max(linear_velocity)
         flight_bouts = apply_hysteresis_filter(normalized_linear_velocity)
@@ -587,14 +590,14 @@ def get_all_saccades(
             # Detect saccades within this bout
             bout_angular_velocity = angular_velocity[bout_indices]
             bout_saccades = detect_saccades(
-                bout_angular_velocity, 
-                params["saccade"].threshold, 
-                params["saccade"].distance
+                bout_angular_velocity,
+                params["saccade"].threshold,
+                params["saccade"].distance,
             )
-            
+
             # Convert bout-relative saccade indices to trajectory-relative indices (so we can index into the full angular_velocity and linear_velocity)
             trajectory_saccades = bout_indices[bout_saccades]
-            
+
             good_saccades = []
             # Process each saccade in this bout
             for sac in trajectory_saccades:
@@ -621,13 +624,16 @@ def get_all_saccades(
 
                 # Extract saccade traces
                 saccade_angular_velocity = angular_velocity[
-                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                    sac - params["saccade"].pre_frames : sac
+                    + params["saccade"].post_frames
                 ]
                 saccade_linear_velocity = linear_velocity[
-                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                    sac - params["saccade"].pre_frames : sac
+                    + params["saccade"].post_frames
                 ]
                 saccade_xyz = grp[["x", "y", "z"]].values[
-                    sac - params["saccade"].pre_frames : sac + params["saccade"].post_frames
+                    sac - params["saccade"].pre_frames : sac
+                    + params["saccade"].post_frames
                 ]
 
                 heading_difference = calculate_heading_diff(
@@ -644,8 +650,11 @@ def get_all_saccades(
                 good_saccades.append(sac)
 
             # Calculate bout-specific metrics
-            bout_duration = grp.timestamp.iloc[bout_indices[-1]] - grp.timestamp.iloc[bout_indices[0]]
-            
+            bout_duration = (
+                grp.timestamp.iloc[bout_indices[-1]]
+                - grp.timestamp.iloc[bout_indices[0]]
+            )
+
             if len(good_saccades) < 2:
                 saccade_data["ISI"].append(np.nan)
                 saccade_data["saccade_per_second"].append(np.nan)
@@ -658,7 +667,7 @@ def get_all_saccades(
                 saccade_data["saccade_per_second"].append(
                     len(good_saccades) / bout_duration
                 )
-            
+
             saccade_data["num_of_saccades"].append(len(good_saccades))
             saccade_data["trajectory_duration"].append(bout_duration)
 

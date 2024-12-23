@@ -150,7 +150,6 @@ dependencies = [
     { name = "natsort" },
     { name = "numpy" },
     { name = "pandas" },
-    { name = "pre-commit" },
     { name = "pyarrow" },
     { name = "pynumdiff" },
     { name = "ruff" },
@@ -162,10 +161,12 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "pip-tools" },
+    { name = "pre-commit" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "braidz-analysis", marker = "extra == 'dev'", editable = "." },
     { name = "cvxpy", specifier = ">=1.6.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "matplotlib", specifier = ">=3.10.0" },
@@ -173,7 +174,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "pip-tools", marker = "extra == 'dev'" },
-    { name = "pre-commit", specifier = ">=4.0.1" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.1" },
     { name = "pyarrow", specifier = ">=18.1.0" },
     { name = "pynumdiff", specifier = ">=0.1.2" },
     { name = "ruff", specifier = ">=0.8.3" },
