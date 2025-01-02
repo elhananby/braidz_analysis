@@ -14,11 +14,11 @@ DEFAULT_SACCADE_PARAMS = {
 DEFAULT_OPTO_PARAMS = {
     "pre_frames": 50,
     "post_frames": 100,
-    "duration": 300,
+    "duration": 30,  # in frames
 }
 
 DEFAULT_STIM_PARAMS = {
     "pre_frames": 50,
     "post_frames": 100,
-    "duration": 500,
+    "duration": 50,
 }

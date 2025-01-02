@@ -178,7 +178,7 @@ def get_stim_or_opto_data(
         "linear_velocity": [],
         "position": [],
         "heading_difference": [],
-        "frames_in_opto_radius": [],
+        "frames_in_radius": [],
         "sham": [],
     }
 
@@ -218,7 +218,7 @@ def get_stim_or_opto_data(
 
         # calculate how many frames in opto radius
         radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
-        frames_in_opto_radius = np.sum(
+        frames_in_radius = np.sum(
             radius[stim_or_opto_idx : stim_or_opto_idx + kwargs.get("duration", 30)]
             < kwargs.get("radius", 0.025)
         )
@@ -237,7 +237,7 @@ def get_stim_or_opto_data(
         opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
         opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
         opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
-        opto_data["frames_in_opto_radius"].append(frames_in_opto_radius)
+        opto_data["frames_in_radius"].append(frames_in_radius)
         opto_data["heading_difference"].append(heading_difference)
         opto_data["sham"].append(row["sham"] if "sham" in row else False)
 

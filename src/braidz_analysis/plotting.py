@@ -3,7 +3,82 @@ from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .helpers import get_mean_and_std
+from .helpers import get_mean_and_std, subtract_baseline
+
+
+def plot_angular_velocity(
+    data: dict,
+    ax: Optional[plt.Axes] = None,
+    use_abs: bool = False,
+    baseline_range: list = [0, 50],
+    shaded_region: list = [50, 80],
+    convert_to_degrees: bool = False,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plots the angular velocity data.
+
+    Args:
+        data (dict): A dictionary containing the angular velocity data.
+        ax (Optional[plt.Axes], optional): The matplotlib Axes object to plot on. If not provided, a new figure and axes will be created. Defaults to None.
+        use_abs (bool, optional): Whether to use the absolute values of the angular velocity. Defaults to False.
+        baseline_range (list, optional): The range of indices to use for baseline subtraction. Only applicable if use_abs is True. Defaults to [0, 50].
+        shaded_region (list, optional): The range of indices to shade in the plot. Defaults to [50, 80].
+        convert_to_degrees (bool, optional): Whether to convert the angular velocity to degrees. Defaults to False.
+
+    Returns:
+        plt.Axes: The matplotlib Axes object containing the plot.
+    """
+    velocity = data["angular_velocity"]
+
+    if baseline_range and not use_abs:
+        raise ValueError("Baseline subtraction requires absolute values (use_abs=True)")
+
+    elif use_abs:
+        velocity = np.abs(velocity)
+        if baseline_range:
+            velocity = subtract_baseline(velocity, *baseline_range)
+
+    if convert_to_degrees:
+        velocity = np.rad2deg(velocity)
+
+    ax = plot_mean_and_std(velocity, ax=ax, **kwargs)
+
+    if shaded_region is not None:
+        ax = add_shaded_region(
+            ax, shaded_region[0], shaded_region[1], color="gray", alpha=0.3
+        )
+    ax.set_xlabel("Time (frames)")
+    value = "deg" if convert_to_degrees else "radians"
+    ax.set_ylabel(f"Angular Velocity ({value}/s)")
+    return ax
+
+
+def plot_linear_velocity(
+    data: dict, ax: Optional[plt.Axes] = None, shaded_region: list = [50, 80], **kwargs
+) -> plt.Axes:
+    """
+    Plots the linear velocity data.
+
+    Parameters:
+        data (dict): A dictionary containing the data.
+        ax (Optional[plt.Axes]): The matplotlib Axes object to plot on. If None, a new figure and axes will be created.
+        shaded_region (list): A list specifying the range of the shaded region. Default is [50, 80].
+
+    Returns:
+        plt.Axes: The matplotlib Axes object with the plotted data.
+    """
+
+    velocity = data["linear_velocity"]
+    ax = plot_mean_and_std(velocity, ax=ax, **kwargs)
+
+    if shaded_region is not None:
+        ax = add_shaded_region(
+            ax, shaded_region[0], shaded_region[1], color="gray", alpha=0.3
+        )
+    ax.set_xlabel("Time (frames)")
+    ax.set_ylabel("Linear Velocity (m/s)")
+    return ax
 
 
 def plot_mean_and_std(
@@ -77,6 +152,38 @@ def plot_histogram(
     # Create histogram
     ax.hist(arr, **kwargs)
 
+    return ax
+
+
+def plot_heading_difference(
+    data: dict,
+    ax: Optional[plt.Axes] = None,
+    convert_to_degrees: bool = False,
+    value_range: list = [-np.pi, np.pi],
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plots the histogram of heading differences.
+
+    Args:
+        data (dict): The data dictionary containing the heading differences.
+        ax (Optional[plt.Axes]): The matplotlib Axes object to plot on. If not provided, a new figure and axes will be created.
+        convert_to_degrees (bool): Whether to convert the heading differences to degrees. Default is False.
+        value_range (list): The range of values to display on the x-axis. Default is [-np.pi, np.pi].
+
+    Returns:
+        plt.Axes: The matplotlib Axes object containing the histogram plot.
+    """
+    differences = data["heading_difference"]
+
+    if convert_to_degrees:
+        differences = np.rad2deg(differences)
+        value_range = [-180, 180]
+
+    ax = plot_histogram(differences, ax=ax, bins=30, range=value_range, **kwargs)
+    value = "degrees" if convert_to_degrees else "radians"
+    ax.set_xlabel(f"Heading Difference ({value})")
+    ax.set_ylabel("Count")
     return ax
 
 

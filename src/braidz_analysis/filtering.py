@@ -183,8 +183,8 @@ def filter_by_sham(
     return real_data, sham_data
 
 
-def filter_by_frames_in_opto_radius(
-    data: Dict[str, np.ndarray], thresholds: Union[float, List[float]]
+def filter_by_frames_in_radius(
+    data: Dict[str, np.ndarray], thresholds: Union[float, List[float]] = [15]
 ) -> List[Dict[str, np.ndarray]]:
     """
     Splits the data dictionary into multiple groups based on frames_in_opto_radius values.
@@ -198,7 +198,7 @@ def filter_by_frames_in_opto_radius(
 
     Returns:
         List of dictionaries with the same structure as input, where each dictionary
-        contains data for the corresponding interval of frames_in_opto_radius
+        contains data for the corresponding interval of frames_in_radius
     """
     # Convert single threshold to list
     if isinstance(thresholds, (int, float)):
@@ -206,7 +206,7 @@ def filter_by_frames_in_opto_radius(
     thresholds = sorted(thresholds)
 
     # Create masks for each bin
-    frames = data["frames_in_opto_radius"]
+    frames = data["frames_in_radius"]
     masks = []
 
     # First bin: <= first threshold

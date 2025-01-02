@@ -147,3 +147,23 @@ def dict_list_to_numpy(data: dict) -> dict:
         except ValueError:
             print(f"Error converting {k} to numpy array")
     return data
+
+
+def subtract_baseline(arr: np.ndarray, start_idx: int, end_idx: int) -> np.ndarray:
+    """Subtract baseline from input array along the second axis.
+
+    Args:
+        arr: Input array of shape (n_samples, n_timepoints)
+        start_idx: Start index for baseline subtraction
+        end_idx: End index for baseline subtraction
+
+    Returns:
+        np.ndarray: Array with baseline subtracted along the second axis
+
+    Example:
+        >>> data = np.random.randn(100, 10)  # 100 samples, 10 timepoints
+        >>> baseline_subtracted = subtract_baseline(data, start_idx=0, end_idx=5)
+    """
+    baseline = np.nanmean(arr[:, start_idx:end_idx], axis=1)
+    normalized_data = arr - baseline[:, np.newaxis]
+    return normalized_data
