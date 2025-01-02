@@ -157,70 +157,57 @@ def find_common_trajectories(*args) -> List[Tuple[int, int]]:
 
 def filter_by_sham(
     data: Dict[str, np.ndarray],
-) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+) -> Dict[str, np.ndarray]:
     """
-    Splits the data dictionary into two based on the sham boolean array.
+    Creates masks for splitting data based on sham boolean array.
 
     Args:
-        data: Dictionary containing trajectory data with keys:
-            - angular_velocity: array of shape (k, n)
-            - linear_velocity: array of shape (k, n)
-            - position: array of shape (k, n, 3)
-            - heading_difference: array of shape (k,)
-            - frames_in_opto_radius: array of shape (k,)
-            - sham: boolean array of shape (k,)
+        data: Dictionary containing trajectory data with 'sham' boolean array of shape (k,)
 
     Returns:
-        Tuple of two dictionaries (real_data, sham_data) with the same structure as input,
-        split based on sham boolean values
+        Dictionary with two boolean arrays of shape (k,):
+            - 'real': mask for non-sham data
+            - 'sham': mask for sham data
     """
-    real_mask = ~data["sham"]
-    sham_mask = data["sham"]
-
-    real_data = {key: data[key][real_mask] for key in data}
-    sham_data = {key: data[key][sham_mask] for key in data}
-
-    return real_data, sham_data
+    return {"real": ~data["sham"], "sham": data["sham"]}
 
 
 def filter_by_frames_in_radius(
     data: Dict[str, np.ndarray], thresholds: Union[float, List[float]] = [15]
-) -> List[Dict[str, np.ndarray]]:
+) -> Dict[str, np.ndarray]:
     """
-    Splits the data dictionary into multiple groups based on frames_in_opto_radius values.
+    Creates masks for splitting data based on frames_in_radius values.
 
     Args:
-        data: Dictionary containing trajectory data with arrays that share first dimension k,
-            where k is the number of trajectories
+        data: Dictionary containing trajectory data with 'frames_in_radius' array of shape (k,)
         thresholds: Either a single float value or a list of float values
-            - If single float: splits data into two groups (below and above threshold)
-            - If list: splits data into groups based on intervals [0, t1], [t1, t2], ..., [tn-1, tn]
+            - If single float: creates two masks (below and above threshold)
+            - If list: creates masks for intervals [0, t1], [t1, t2], ..., [tn-1, tn]
 
     Returns:
-        List of dictionaries with the same structure as input, where each dictionary
-        contains data for the corresponding interval of frames_in_radius
+        Dictionary mapping threshold descriptions to boolean masks of shape (k,):
+            - For single threshold t: {'<=t': mask, '>t': mask}
+            - For thresholds [t1,t2]: {'<=t1': mask, 't1-t2': mask, '>t2': mask}
     """
-    # Convert single threshold to list
     if isinstance(thresholds, (int, float)):
         thresholds = [float(thresholds)]
     thresholds = sorted(thresholds)
 
-    # Create masks for each bin
     frames = data["frames_in_radius"]
-    masks = []
+    masks = {}
 
-    # First bin: <= first threshold
-    masks.append(frames <= thresholds[0])
+    # First bin
+    masks[f"<={thresholds[0]}"] = frames <= thresholds[0]
 
-    # Middle bins: between thresholds
+    # Middle bins
     for i in range(len(thresholds) - 1):
-        masks.append((frames > thresholds[i]) & (frames <= thresholds[i + 1]))
+        key = f"{thresholds[i]}-{thresholds[i+1]}"
+        masks[key] = (frames > thresholds[i]) & (frames <= thresholds[i + 1])
 
-    # Last bin: > last threshold
-    masks.append(frames > thresholds[-1])
+    # Last bin
+    masks[f">{thresholds[-1]}"] = frames > thresholds[-1]
 
-    # Apply masks to create filtered dictionaries
-    return [{key: data[key][mask] for key in data} for mask in masks]
+    return masks
 
 
 def apply_hysteresis_filter(
@@ -295,3 +282,17 @@ def apply_hysteresis_filter(
     combined_segments.append(current_segment)
 
     return combined_segments
+
+
+def apply_mask(data: Dict[str, np.ndarray], mask: np.ndarray) -> Dict[str, np.ndarray]:
+    """
+    Applies a boolean mask to all arrays in the dictionary.
+
+    Args:
+        data: Dictionary of arrays where all arrays share the same first dimension k
+        mask: Boolean array of shape (k,) to apply to the first dimension of all arrays
+
+    Returns:
+        Dictionary with the same structure as input, with mask applied to all arrays
+    """
+    return {key: data[key][mask] for key in data}
