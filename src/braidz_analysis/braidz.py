@@ -1,33 +1,29 @@
-"""
-braidz: A module for reading and processing .braidz files and related data.
-
-This module provides utilities for reading single or multiple .braidz files,
-which are zip archives containing CSV and gzipped CSV data. It supports both
-direct reading from archives and extraction to folders, with options for
-different CSV parsing engines.
-
-Features:
-- Single and multi-file reading capabilities
-- Support for both pandas and pyarrow parsing engines with automatic fallback
-- Robust error handling and validation
-- Progress tracking for long operations
-"""
-
-import os
-import zipfile
-import gzip
+import io
 import logging
-from typing import Dict, Optional, Literal, Union, List
+import os
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from importlib.util import find_spec
+from typing import Dict, List, Literal, Optional, Union
 
 import pandas as pd
+from typing_extensions import TypedDict
 
-# Configure logging
+class EmptyKalmanError(Exception):
+    """Raised when kalman_estimates.csv.gz is empty"""
+    pass
+
+# Configure logging and constants
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL
+}
+
 logger = logging.getLogger(__name__)
-
-# Set log level to INFO
-logger.setLevel(logging.INFO)
 
 # Check if pyarrow is available
 PYARROW_AVAILABLE = find_spec("pyarrow") is not None
@@ -37,242 +33,235 @@ if PYARROW_AVAILABLE:
 else:
     logger.info("PyArrow not found, defaulting to pandas for CSV parsing")
 
+class BraidzData(TypedDict):
+    """Type definition for the return value of read_braidz"""
+    df: pd.DataFrame  # kalman estimates
+    opto: Optional[pd.DataFrame]  # optogenetics data
+    stim: Optional[pd.DataFrame]  # stimulus data
+    other_csvs: Dict[str, List[pd.DataFrame]]  # other CSV files
 
 @dataclass
-class BraidzData:
+class CSVFiles:
+    """Container for CSV file names in braidz archives"""
+    KALMAN = "kalman_estimates.csv.gz"
+    OPTO = "opto.csv"
+    STIM = "stim.csv"
+
+def _open_filename_or_url(filename_or_url: str) -> io.BufferedReader:
     """
-    Container for data extracted from braidz files.
-
-    Attributes:
-        kalman_estimates: DataFrame containing kalman estimates data
-        csv_data: Dictionary of additional CSV data files
-        source_file: Path to the source braidz file
-    """
-
-    kalman_estimates: Optional[pd.DataFrame]
-    csv_data: Dict[str, pd.DataFrame]
-    source_file: str
-
-
-class BraidzError(Exception):
-    """Base exception class for braidz-related errors."""
-
-    pass
-
-
-class BraidzFileError(BraidzError):
-    """Raised when there are issues with file operations."""
-
-    pass
-
-
-class BraidzValidationError(BraidzError):
-    """Raised when file validation fails."""
-
-    pass
-
-
-class BraidzParsingError(BraidzError):
-    """Raised when data parsing fails."""
-
-    pass
-
-
-def read_csv(
-    file_obj, parser: Literal["pandas", "pyarrow"] = "pyarrow"
-) -> Optional[pd.DataFrame]:
-    """
-    Read a CSV file using the specified parser with automatic fallback.
-
+    Open a file from either a local path or URL.
+    
     Args:
-        file_obj: File-like object or path containing CSV data.
-        parser: Preferred parser to use ("pandas" or "pyarrow"). Defaults to "pyarrow"
-               if available, otherwise falls back to "pandas".
-
+        filename_or_url: Local file path or URL to open
+        
     Returns:
-        DataFrame containing the CSV data, or None if invalid/empty.
-
-    Raises:
-        BraidzParsingError: If parsing fails for any reason other than empty file.
+        File object with seek capability
     """
-    # If pyarrow is requested but not available, fall back to pandas
-    if parser == "pyarrow" and not PYARROW_AVAILABLE:
-        logger.debug("PyArrow requested but not available, falling back to pandas")
-        parser = "pandas"
+    parsed = urllib.parse.urlparse(filename_or_url)
+    is_windows_drive = len(parsed.scheme) == 1
+    
+    if is_windows_drive or parsed.scheme == "":
+        return open(filename_or_url, mode="rb")
+    
+    # Handle URL case
+    req = urllib.request.Request(filename_or_url, headers={"User-Agent": "IPYNB"})
+    fileobj = urllib.request.urlopen(req)
+    return io.BytesIO(fileobj.read())
 
-    try:
-        if parser == "pyarrow":
-            try:
-                table = pv.read_csv(
-                    file_obj, read_options=pv.ReadOptions(skip_rows_after_names=1)
-                )
-                return table.to_pandas()
-            except pa.ArrowInvalid as e:
-                logger.warning(
-                    f"PyArrow parsing failed: {str(e)}:{file_obj}, falling back to pandas"
-                )
-                # If pyarrow fails, try pandas as fallback
-                return pd.read_csv(file_obj, comment="#")
-        else:  # pandas
-            return pd.read_csv(file_obj, comment="#")
-
-    except pd.errors.EmptyDataError:
-        logger.warning(f"Empty CSV file {file_obj} encountered")
+def _read_csv_safe(archive: zipfile.ZipFile, 
+                  filename: str, 
+                  exp_num: int,
+                  engine: str = "pandas",
+                  **kwargs) -> Optional[pd.DataFrame]:
+    """
+    Safely read a CSV file from a zip archive with error handling.
+    
+    Args:
+        archive: Zip archive containing the CSV
+        filename: Name of the CSV file in the archive
+        exp_num: Experiment number to add as a column
+        engine: CSV parsing engine to use ('pandas' or 'pyarrow')
+        **kwargs: Additional arguments passed to the CSV reader
+        
+    Returns:
+        DataFrame if successful, None if file is empty or doesn't exist
+        
+    Raises:
+        EmptyKalmanError: If kalman_estimates.csv.gz is empty
+    """
+    if filename not in archive.namelist():
+        logger.debug(f"{filename} not found in archive")
         return None
-    except Exception as e:
-        raise BraidzParsingError(
-            f"Failed to parse CSV {file_obj} with {parser}: {str(e)}"
-        )
+        
+    try:
+        if engine == "pyarrow" and filename == CSVFiles.KALMAN:
+            import gzip
+            # Read and decompress the gzipped content first
+            with gzip.open(archive.open(filename), 'rt') as f:
+                # Skip the first line if it's a comment
+                first_line = f.readline()
+                if first_line.startswith('#'):
+                    content = f.read()
+                else:
+                    content = first_line + f.read()
+                
+            # Use PyArrow to read the decompressed content
+            try:
+                df = pv.read_csv(
+                    pa.py_buffer(content.encode('utf-8')),
+                    read_options=pv.ReadOptions()
+                ).to_pandas()
+            except pa.ArrowInvalid as e:
+                if "Empty CSV file" in str(e) and filename == CSVFiles.KALMAN:
+                    raise EmptyKalmanError(f"Empty {filename}")
+                logger.debug(f"Empty {filename} in archive")
+                return None
+        else:
+            compression = 'gzip' if filename.endswith('.gz') else None
+            df = pd.read_csv(
+                archive.open(filename),
+                compression=compression,
+                comment="#" if filename == CSVFiles.KALMAN else None,
+                **kwargs
+            )
+        
+        df["exp_num"] = exp_num
+        return df
+        
+    except pd.errors.EmptyDataError:
+        if filename == CSVFiles.KALMAN:
+            raise EmptyKalmanError(f"Empty {filename}")
+        logger.debug(f"Empty {filename} in archive")
+        return None
 
+def _process_other_csvs(archive: zipfile.ZipFile, 
+                       excluded_files: List[str]) -> Dict[str, List[pd.DataFrame]]:
+    """
+    Process all CSV files in the archive except those in excluded_files.
+    
+    Args:
+        archive: Zip archive containing the CSV files
+        excluded_files: List of CSV files to exclude from processing
+        
+    Returns:
+        Dictionary mapping CSV filenames to lists of DataFrames
+    """
+    other_csvs = {}
+    
+    for name in archive.namelist():
+        if name.endswith(".csv") and name not in excluded_files:
+            try:
+                df = pd.read_csv(archive.open(name))
+                other_csvs.setdefault(name, []).append(df)
+            except pd.errors.EmptyDataError:
+                logger.debug(f"Empty {name} in archive")
+                
+    return other_csvs
 
-def read_braidz_file(
-    filename: str, parser: Literal["pandas", "pyarrow"] = "pyarrow"
+def read_braidz(
+    files: Union[str, List[str]],
+    base_folder: Optional[str] = None,
+    engine: Literal["pandas", "pyarrow", "auto"] = "auto",
+    log_level: str = "info"
 ) -> BraidzData:
     """
-    Read data from a .braidz file using the specified parser.
-
+    Read data from one or more .braidz files.
+    
     Args:
-        filename: Path to the .braidz file.
-        parser: Parser to use ("pandas" or "pyarrow"). Defaults to "pyarrow"
-               if available, otherwise falls back to "pandas".
-
+        files: Single file path/URL or list of file paths/URLs
+        base_folder: Optional base folder to prepend to file paths
+        engine: CSV parsing engine to use ('pandas', 'pyarrow', or 'auto')
+        log_level: Logging level to use (default: 'info'). Must be one of:
+                  'debug', 'info', 'warning', 'error', or 'critical'
+        
     Returns:
-        BraidzData object containing the extracted data.
-
+        Dictionary containing combined data from all files:
+        - 'df': Kalman estimates DataFrame
+        - 'opto': Optogenetics DataFrame (if present)
+        - 'stim': Stimulus DataFrame (if present)
+        - 'other_csvs': Dictionary of other CSV files found
+        
     Raises:
-        BraidzFileError: If file operations fail.
-        BraidzParsingError: If data parsing fails.
-        BraidzValidationError: If file validation fails.
+        FileNotFoundError: If any specified file doesn't exist
+        ValueError: If no valid kalman_estimates.csv.gz found in any file
+                   or if invalid log_level provided
     """
-    if not os.path.exists(filename):
-        raise BraidzFileError(f"File not found: {filename}")
-
-    if not filename.endswith(".braidz"):
-        raise BraidzValidationError(f"Invalid file type: {filename}")
-
-    csv_data: Dict[str, pd.DataFrame] = {}
-
-    try:
-        with zipfile.ZipFile(filename, "r") as archive:
-            logger.info(f"Reading {filename} using {parser}")
-
-            # Read kalman_estimates.csv.gz
-            try:
-                with archive.open("kalman_estimates.csv.gz") as file:
-                    if parser == "pandas":
-                        df = read_csv(gzip.open(file, "rt"), parser="pandas")
-                    else:
-                        with gzip.open(file, "rb") as unzipped:
-                            df = read_csv(unzipped, parser=parser)
-
-                if df is None or df.empty:
-                    logger.warning(f"Empty kalman_estimates in {filename}")
-                    return BraidzData(None, {}, filename)
-
-            except KeyError:
-                logger.error(f"kalman_estimates.csv.gz not found in {filename}")
-                return BraidzData(None, {}, filename)
-
-            # Read other CSV files
-            csv_files = [f for f in archive.namelist() if f.endswith(".csv")]
-            for csv_file in csv_files:
-                key = os.path.splitext(csv_file)[0]
-                try:
-                    csv_data[key] = read_csv(archive.open(csv_file), parser=parser)
-                except Exception as e:
-                    logger.warning(f"Failed to read {csv_file}: {str(e)}")
-                    continue
-
-        return BraidzData(df, csv_data, filename)
-
-    except zipfile.BadZipFile:
-        raise BraidzFileError(f"Invalid zip file: {filename}")
-    except Exception as e:
-        raise BraidzFileError(f"Failed to process {filename}: {str(e)}")
-
-
-def read_multiple_braidz(
-    files: Union[List[str], str],
-    root_folder: Optional[str] = None,
-    parser: Literal["pandas", "pyarrow"] = "pyarrow",
-) -> Dict[str, pd.DataFrame]:
-    """
-    Read and combine data from multiple .braidz files.
-
-    Args:
-        files: List of file paths or single file path.
-        root_folder: Optional root folder path to prepend to file paths.
-        parser: Parser to use ("pandas" or "pyarrow"). Defaults to "pyarrow"
-               if available, otherwise falls back to "pandas".
-
-    Returns:
-        Dictionary containing combined DataFrames:
-            - 'df': Combined kalman estimates
-            - 'stim': Combined stimulus data (if present)
-            - 'opto': Combined opto data (if present)
-
-    Raises:
-        BraidzError: If any file processing fails.
-    """
+    # Set logging level
+    log_level = log_level.lower()
+    if log_level not in LOG_LEVELS:
+        raise ValueError(f"Invalid log_level: {log_level}. Must be one of: {', '.join(LOG_LEVELS.keys())}")
+    logger.setLevel(LOG_LEVELS[log_level])
+    
+    # Handle input validation and normalization
     if isinstance(files, str):
         files = [files]
-
-    dfs, stims, optos = [], [], []
-    total_files = len(files)
-    logger.info(f"Processing {total_files} files")
-
-    for i, filename in enumerate(files):
+        
+    if base_folder is not None:
+        files = [os.path.join(base_folder, f) for f in files]
+        
+    for f in files:
+        if not os.path.exists(f):
+            raise FileNotFoundError(f"File not found: {f}")
+            
+    # Determine engine to use
+    if engine == "auto":
+        engine = "pyarrow" if PYARROW_AVAILABLE else "pandas"
+            
+    # Initialize data containers
+    kalman_dfs = []
+    optos = []
+    stims = []
+    all_other_csvs = {}
+    
+    # Process each file
+    skipped_files = []
+    for exp_num, filepath in enumerate(files):
+        logger.debug(f"Reading file: {filepath}")
+        
         try:
-            if root_folder:
-                filename = os.path.join(root_folder, filename)
-
-            print(f"Processing file {i+1}/{total_files}: {filename}")
-            data = read_braidz_file(filename, parser=parser)
-
-            if data.kalman_estimates is not None:
-                df = data.kalman_estimates.copy()
-                df["exp_num"] = i
-                dfs.append(df)
-
-                if "stim" in data.csv_data:
-                    stim = data.csv_data["stim"].copy()
-                    stim["exp_num"] = i
-                    stims.append(stim)
-
-                if "opto" in data.csv_data:
-                    opto = data.csv_data["opto"].copy()
-                    opto["exp_num"] = i
-                    optos.append(opto)
-
+            with zipfile.ZipFile(_open_filename_or_url(filepath), "r") as archive:
+                # Read required kalman estimates
+                try:
+                    kalman_df = _read_csv_safe(archive, CSVFiles.KALMAN, exp_num, engine)
+                    if kalman_df is None:
+                        raise FileNotFoundError(f"{CSVFiles.KALMAN} not found in {filepath}")
+                    kalman_dfs.append(kalman_df)
+                except EmptyKalmanError:
+                    logger.warning(f"Skipping {filepath} due to empty kalman estimates")
+                    skipped_files.append(filepath)
+                    continue
+                
+                # Read optional files
+                opto_df = _read_csv_safe(archive, CSVFiles.OPTO, exp_num)
+                if opto_df is not None:
+                    optos.append(opto_df)
+                    
+                stim_df = _read_csv_safe(archive, CSVFiles.STIM, exp_num)
+                if stim_df is not None:
+                    stims.append(stim_df)
+                    
+                # Process other CSVs
+                excluded_files = [CSVFiles.KALMAN, CSVFiles.OPTO, CSVFiles.STIM]
+                other_csvs = _process_other_csvs(archive, excluded_files)
+                
+                # Merge other_csvs dictionaries
+                for name, dfs in other_csvs.items():
+                    all_other_csvs.setdefault(name, []).extend(dfs)
         except Exception as e:
-            logger.error(f"Error processing {filename}: {str(e)}")
+            logger.error(f"Error processing {filepath}: {str(e)}")
+            skipped_files.append(filepath)
             continue
-
-    # Combine all dataframes if they exist
-    result = {}
-    logger.info("Combining processed data")
-    if dfs:
-        result["df"] = pd.concat(dfs, ignore_index=True)
-        logger.info(f"Combined {len(dfs)} kalman estimate dataframes")
-    if stims:
-        result["stim"] = pd.concat(stims, ignore_index=True)
-        logger.info(f"Combined {len(stims)} stimulus dataframes")
-    if optos:
-        result["opto"] = pd.concat(optos, ignore_index=True)
-        logger.info(f"Combined {len(optos)} optogenetics dataframes")
-
-    return result
-
-
-# Basic usage - will use pyarrow if available, otherwise pandas
-# data = read_braidz_file("path/to/file.braidz")
-
-# # Explicitly specify parser
-# data = read_braidz_file("path/to/file.braidz", parser="pandas")
-
-# # Multiple files with specific parser
-# combined_data = read_multiple_braidz(
-#     ["file1.braidz", "file2.braidz"],
-#     root_folder="data/",
-#     parser="pyarrow"
-# )
+    
+    if not kalman_dfs:
+        raise ValueError("No valid kalman_estimates.csv.gz found in any of the files")
+    
+    # Combine results
+    try:
+        return {
+            "df": pd.concat(kalman_dfs),
+            "opto": pd.concat(optos) if optos else None,
+            "stim": pd.concat(stims) if stims else None,
+            "other_csvs": all_other_csvs
+        }
+    except ValueError:
+        raise ValueError("No valid kalman_estimates.csv.gz found in any of the files")

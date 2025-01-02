@@ -152,35 +152,39 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pynumdiff" },
-    { name = "ruff" },
     { name = "scipy" },
     { name = "seaborn" },
     { name = "tqdm" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pip-tools" },
     { name = "pre-commit" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "braidz-analysis", marker = "extra == 'dev'", editable = "." },
     { name = "cvxpy", specifier = ">=1.6.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "matplotlib", specifier = ">=3.10.0" },
     { name = "natsort", specifier = ">=8.4.0" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "pandas", specifier = ">=2.2.3" },
-    { name = "pip-tools", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.1" },
     { name = "pyarrow", specifier = ">=18.1.0" },
     { name = "pynumdiff", specifier = ">=0.1.2" },
-    { name = "ruff", specifier = ">=0.8.3" },
     { name = "scipy", specifier = ">=1.14.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "tqdm", specifier = ">=4.67.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "braidz-analysis", editable = "." },
+    { name = "pip-tools" },
+    { name = "pre-commit", specifier = ">=4.0.1" },
+    { name = "ruff", specifier = ">=0.8.3" },
 ]
 
 [[package]]

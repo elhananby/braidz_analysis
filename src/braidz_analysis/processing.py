@@ -1,16 +1,17 @@
 import logging
+from typing import Dict, Optional, Any
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from .helpers import dict_list_to_numpy
-
 from .trajectory import (
     calculate_angular_velocity,
     calculate_heading_diff,
     calculate_linear_velocity,
     detect_saccades,
+    calculate_smoothed_linear_velocity,
 )
 from .types import (
     AnalysisParamType,
@@ -26,53 +27,21 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def get_opto_data(
-    df: pd.DataFrame,
-    opto: pd.DataFrame,
-    opto_params: dict | OptoAnalysis | None = None,
-    saccade_params: dict | SaccadeParams | None = None,
-    trajectory_params: dict | TrajectoryParams | None = None,
-) -> dict:
-    """Analyze optogenetic stimulation data with parameter validation.
-
-    Args:
-        df: DataFrame containing trajectory data
-        opto: DataFrame containing optogenetic stimulation events
-        opto_params: Optogenetic analysis parameters
-        saccade_params: Saccade detection parameters
-        trajectory_params: Trajectory analysis parameters
-
-    Returns:
-        dict: Dictionary containing analyzed data arrays
-    """
-    # Initialize parameters using ParameterManager
-    params = {
-        "opto": ParameterManager.initialize_params(
-            AnalysisParamType.OPTOGENETICS, opto_params
-        ),
-        "saccade": ParameterManager.initialize_params(
-            AnalysisParamType.SACCADE, saccade_params
-        ),
-        "trajectory": ParameterManager.initialize_params(
-            AnalysisParamType.TRAJECTORY, trajectory_params
-        ),
-    }
-
-    opto_data = {
+def get_stim_or_opto_response_data(
+    df: pd.DataFrame, opto_or_stim: pd.DataFrame, **kwargs: Dict[str, Any]
+):
+    output_data = {
         "angular_velocity": [],
-        "angular_velocity_peak_centered": [],
         "linear_velocity": [],
-        "linear_velocity_peak_centered": [],
-        "xyz": [],
+        "position": [],
         "heading_difference": [],
-        "heading_difference_peak_centered": [],
-        "frames_in_opto_radius": [],
+        "frames_in_radius": [],
         "sham": [],
         "reaction_delay": [],
         "responsive": [],
     }
 
-    for _, row in opto.iterrows():
+    for _, row in opto_or_stim.iterrows():
         if "exp_num" in row:
             grp = df[
                 (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
@@ -80,19 +49,19 @@ def get_opto_data(
         else:
             grp = df[df["obj_id"] == row["obj_id"]]
 
-        if len(grp) < params["opto"].min_frames:
+        if len(grp) < kwargs.get("min_frames", 300):
             logger.debug(f"Skipping trajectory with {len(grp)} frames")
             continue
 
         try:
-            opto_idx = np.where(grp["frame"] == row["frame"])[0][0]
+            opto_or_stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
         except IndexError:
             logger.debug("Skipping trajectory with no opto frame")
             continue
 
-        if opto_idx - params["opto"].pre_frames < 0 or opto_idx + params[
-            "opto"
-        ].post_frames >= len(grp):
+        if opto_or_stim_idx - kwargs.get(
+            "pre_frames", 50
+        ) < 0 or opto_or_stim_idx + kwargs.get("post_frames", 50) >= len(grp):
             logger.debug("Skipping trajectory with insufficient frames")
             continue
 
@@ -100,104 +69,183 @@ def get_opto_data(
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
         )
-        linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
+        linear_velocity = calculate_smoothed_linear_velocity(grp)
 
         # calculate how many frames in opto radius
         radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
-        frames_in_opto_radius = np.sum(
-            radius[opto_idx : opto_idx + params["opto"].opto_duration]
-            < params["opto"].opto_radius
+        frames_in_radius = np.sum(
+            radius[opto_or_stim_idx : opto_or_stim_idx + kwargs.get("duration", 30)]
+            < kwargs.get("radius", 0.025)
         )
 
-        # get opto range
-        opto_range = range(
-            opto_idx - params["opto"].pre_frames, opto_idx + params["opto"].post_frames
-        )
-
-        opto_data["angular_velocity"].append(angular_velocity[opto_range])
-        opto_data["linear_velocity"].append(linear_velocity[opto_range])
-        opto_data["xyz"].append(grp[["x", "y", "z"]].values[opto_range])
-        opto_data["frames_in_opto_radius"].append(frames_in_opto_radius)
-
-        # calculate heading difference using trajectory params
-        heading_difference = calculate_heading_diff(
-            heading,
-            range(opto_idx - params["trajectory"].heading_diff_window, opto_idx),
-            range(
-                opto_idx,
-                opto_idx
-                + params["opto"].opto_duration
-                + params["trajectory"].heading_diff_window,
-            ),
-        )
-
-        opto_data["heading_difference"].append(heading_difference)
-        opto_data["sham"].append(row["sham"] if "sham" in row else False)
-
-        # find all peaks
         peaks = detect_saccades(
-            angular_velocity, params["saccade"].threshold, params["saccade"].distance
+            angular_velocity, kwargs.get("threshold", np.deg2rad(300)), kwargs.get("distance", 10)
         )
-        opto_peak = [
+
+        opto_or_stim_peaks = [
             peak
             for peak in peaks
-            if opto_idx < peak < opto_idx + params["opto"].opto_duration
+            if opto_or_stim_idx < peak < opto_or_stim_idx + kwargs.get("duration", 30)
         ]
 
         # initialize peak centered data
         peak_centered_angular_velocity = np.full(
-            params["opto"].pre_frames + params["opto"].post_frames, np.nan
+            kwargs.get("pre_frames", 50) + kwargs.get("post_frames", 50), np.nan
         )
         peak_centered_linear_velocity = np.full(
-            params["opto"].pre_frames + params["opto"].post_frames, np.nan
+            kwargs.get("pre_frames", 50) + kwargs.get("post_frames", 50), np.nan
         )
         peak_centered_heading_difference = np.nan
         reaction_delay = np.nan
         responsive = False
 
-        if len(opto_peak) == 0:
+        if len(opto_or_stim_peaks) == 0:
             logger.debug("No peak found")
             continue
-        # if multiple peaks found, append the first peak
-        elif opto_peak[0] - params["saccade"].pre_frames < 0 or opto_peak[0] + params[
-            "saccade"
-        ].post_frames >= len(grp):
+
+        # check if the first peak is within bounds
+        elif opto_or_stim_peaks[0] - kwargs.get(
+            "pre_frames", 50
+        ) < 0 or opto_or_stim_peaks[0] + kwargs.get("post_frames", 50) >= len(grp):
             logger.debug("Skipping peak with insufficient frames")
             continue
+
         else:
-            opto_peak = opto_peak[0]  # only take the first peak
+            opto_or_stim_peaks = opto_or_stim_peaks[0]  # only take the first peak
+
+            range_to_extract = range(
+                opto_or_stim_peaks - kwargs.get("pre_frames", 50),
+                opto_or_stim_peaks + kwargs.get("post_frames", 50),
+            )
 
             # get peak centered data
-            peak_centered_angular_velocity = angular_velocity[
-                opto_peak - params["saccade"].pre_frames : opto_peak
-                + params["saccade"].post_frames
-            ]
-            peak_centered_linear_velocity = linear_velocity[
-                opto_peak - params["saccade"].pre_frames : opto_peak
-                + params["saccade"].post_frames
-            ]
+            peak_centered_angular_velocity = angular_velocity[range_to_extract]
+            peak_centered_linear_velocity = linear_velocity[range_to_extract]
 
             # get peak centered heading difference
             peak_centered_heading_difference = calculate_heading_diff(
                 heading,
-                range(opto_peak - params["trajectory"].heading_diff_window, opto_peak),
-                range(opto_peak, opto_peak + params["trajectory"].heading_diff_window),
+                range(
+                    opto_or_stim_peaks - kwargs.get("heading_diff_window", 10),
+                    opto_or_stim_peaks,
+                ),
+                range(
+                    opto_or_stim_peaks,
+                    opto_or_stim_peaks + kwargs.get("heading_diff_window", 10),
+                ),
             )
 
             # calculate reaction delay
-            reaction_delay = opto_peak - opto_idx
+            reaction_delay = opto_or_stim_peaks - opto_or_stim_idx
             responsive = True
 
         # append peak centered data
-        opto_data["angular_velocity_peak_centered"].append(
+        output_data["angular_velocity"].append(
             peak_centered_angular_velocity
         )
-        opto_data["linear_velocity_peak_centered"].append(peak_centered_linear_velocity)
-        opto_data["heading_difference_peak_centered"].append(
+        output_data["linear_velocity"].append(
+            peak_centered_linear_velocity
+        )
+        output_data["position"].append(
+            grp[["x", "y", "z"]].to_numpy()[range_to_extract]
+        )
+
+        output_data["heading_difference"].append(
             peak_centered_heading_difference
         )
-        opto_data["reaction_delay"].append(reaction_delay)
-        opto_data["responsive"].append(responsive)
+        output_data["frames_in_radius"].append(frames_in_radius)
+        output_data["sham"].append(row.get("sham", False))
+        output_data["reaction_delay"].append(reaction_delay)
+        output_data["responsive"].append(responsive)
+
+    return dict_list_to_numpy(output_data)
+
+
+def get_stim_or_opto_data(
+    df: pd.DataFrame,
+    stim_or_opto: pd.DataFrame,
+    **kwargs: Optional[dict],
+) -> dict:
+    """Analyze optogenetic stimulation data with parameter validation.
+
+    Args:
+        df: DataFrame containing trajectory data.
+        stim_or_opto: DataFrame containing optogenetic or stimulation events.
+        min_frames (optional): Minimum number of frames required for a trajectory. Defaults to 300.
+        pre_frames (optional): Number of frames before the event to extract. Defaults to 50.
+        post_frames (optional): Number of frames after the event to extract. Defaults to 100.
+        duration (optional): Duration of the event in frames. Defaults to 300.
+        radius (optional): Radius of the event in meters. Defaults to 0.025.
+        heading_diff_window (optional): Number of frames to consider for heading difference. Defaults to 10.
+
+    Returns:
+        dict: Dictionary containing analyzed data arrays
+    """
+
+    opto_data = {
+        "angular_velocity": [],
+        "linear_velocity": [],
+        "position": [],
+        "heading_difference": [],
+        "frames_in_opto_radius": [],
+        "sham": [],
+    }
+
+    for _, row in stim_or_opto.iterrows():
+        if "exp_num" in row:
+            grp = df[
+                (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
+            ]
+        else:
+            grp = df[df["obj_id"] == row["obj_id"]]
+
+        if len(grp) < kwargs.get("min_frames", 300):
+            logger.debug(f"Skipping trajectory with {len(grp)} frames")
+            continue
+
+        try:
+            stim_or_opto_idx = np.where(grp["frame"] == row["frame"])[0][0]
+        except IndexError:
+            logger.debug("Skipping trajectory with no opto frame")
+            continue
+        
+        range_to_extract = range(
+            stim_or_opto_idx - kwargs.get("pre_frames", 50),
+            stim_or_opto_idx + kwargs.get("post_frames", 100),
+        )
+
+        # check if any values in `range_to_extract` are out of bounds
+        if range_to_extract[0] < 0 or range_to_extract[-1] >= len(grp):
+            logger.debug("Skipping trajectory with insufficient frames")
+            continue
+
+        # get angular and linear velocity
+        heading, angular_velocity = calculate_angular_velocity(
+            grp.xvel.values, grp.yvel.values
+        )
+        linear_velocity = calculate_smoothed_linear_velocity(grp)
+
+        # calculate how many frames in opto radius
+        radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
+        frames_in_opto_radius = np.sum(
+            radius[stim_or_opto_idx : stim_or_opto_idx + kwargs.get("duration", 30)]
+            < kwargs.get("radius", 0.025)
+        )
+
+        # calculate heading difference using trajectory params
+        heading_difference = calculate_heading_diff(
+            heading,
+            range(stim_or_opto_idx - kwargs.get("heading_diff_window", 10), stim_or_opto_idx),
+            range(stim_or_opto_idx, stim_or_opto_idx + kwargs.get("duration", 30)),
+        )
+
+        # append all data
+        opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
+        opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
+        opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
+        opto_data["frames_in_opto_radius"].append(frames_in_opto_radius)
+        opto_data["heading_difference"].append(heading_difference)
+        opto_data["sham"].append(row["sham"] if "sham" in row else False)
 
     return dict_list_to_numpy(opto_data)
 
