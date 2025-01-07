@@ -33,6 +33,9 @@ def get_stim_or_opto_response_data(
         "sham": [],
         "reaction_delay": [],
         "responsive": [],
+        "intensity": [],
+        "duration": [],
+        "frequency": [],
     }
 
     for _, row in opto_or_stim.iterrows():
@@ -91,6 +94,9 @@ def get_stim_or_opto_response_data(
         peak_centered_linear_velocity = np.full(
             kwargs.get("pre_frames", 50) + kwargs.get("post_frames", 50), np.nan
         )
+        peak_centered_position = np.full(
+            (kwargs.get("pre_frames", 50) + kwargs.get("post_frames", 50), 3), np.nan
+        )
         peak_centered_heading_difference = np.nan
         reaction_delay = np.nan
         responsive = False
@@ -98,8 +104,7 @@ def get_stim_or_opto_response_data(
         # check if no peaks found
         if len(opto_or_stim_peaks) == 0:
             logger.debug("No peak found")
-            continue
-
+            
         # check if the first peak is within bounds
         elif opto_or_stim_peaks[0] - kwargs.get(
             "pre_frames", 50
@@ -135,13 +140,12 @@ def get_stim_or_opto_response_data(
             # calculate reaction delay
             reaction_delay = opto_or_stim_peaks - opto_or_stim_idx
             responsive = True
+            peak_centered_position = grp[["x", "y", "z"]].to_numpy()[range_to_extract]
 
         # append peak centered data
         output_data["angular_velocity"].append(peak_centered_angular_velocity)
         output_data["linear_velocity"].append(peak_centered_linear_velocity)
-        output_data["position"].append(
-            grp[["x", "y", "z"]].to_numpy()[range_to_extract]
-        )
+        output_data["position"].append(peak_centered_position)
 
         output_data["heading_difference"].append(peak_centered_heading_difference)
         output_data["frames_in_radius"].append(frames_in_radius)
@@ -180,6 +184,9 @@ def get_stim_or_opto_data(
         "heading_difference": [],
         "frames_in_radius": [],
         "sham": [],
+        "intensity": [],
+        "duration": [],
+        "frequency": [],
     }
 
     for _, row in stim_or_opto.iterrows():
@@ -239,7 +246,12 @@ def get_stim_or_opto_data(
         opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
         opto_data["frames_in_radius"].append(frames_in_radius)
         opto_data["heading_difference"].append(heading_difference)
+        
+        # append stim or opto specific data
         opto_data["sham"].append(row["sham"] if "sham" in row else False)
+        opto_data["intensity"].append(row["intensity"] if "intensity" in row else np.nan)
+        opto_data["duration"].append(row["duration"] if "duration" in row else np.nan)
+        opto_data["frequency"].append(row["frequency"] if "frequency" in row else np.nan)
 
     return dict_list_to_numpy(opto_data)
 
