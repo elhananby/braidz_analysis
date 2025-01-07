@@ -1,24 +1,30 @@
+from dataclasses import dataclass, field
 import numpy as np
 
-DEFAULT_TRAJECTORY_PARAMS = {
-    "min_frames": 300,
-    "radius": 0.025,
-    "heading_diff_window": 10,
-}
 
-DEFAULT_SACCADE_PARAMS = {
-    "threshold": np.deg2rad(300),
-    "distance": 10,
-}
+@dataclass
+class SaccadeAnalysisParams:
+    threshold: float = np.deg2rad(300)
+    distance: int = 10
+    heading_diff_window: int = 10
+    pre_frames: int = 50
+    post_frames: int = 50
+    zlim: list[float] = field(default_factory=lambda: [0.05, 0.3])
+    max_radius: float = 0.23
 
-DEFAULT_OPTO_PARAMS = {
-    "pre_frames": 50,
-    "post_frames": 100,
-    "duration": 30,  # in frames
-}
 
-DEFAULT_STIM_PARAMS = {
-    "pre_frames": 50,
-    "post_frames": 100,
-    "duration": 50,
-}
+@dataclass
+class OptoAnalysisParams:
+    duration: float = 30.0
+    min_frames: int = 150
+    pre_frames: int = 50
+    post_frames: int = 100
+    radius: float = 0.025
+
+
+@dataclass
+class StimAnalysisParams:
+    duration: float = 50.0
+    min_frames: int = 150
+    pre_frames: int = 50
+    post_frames: int = 100

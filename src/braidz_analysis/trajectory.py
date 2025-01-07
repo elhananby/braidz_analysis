@@ -125,7 +125,7 @@ def sg_smooth(arr, **kwargs):
     )
 
 
-def calculate_heading_diff(heading, indices_before, indices_after):
+def calculate_heading_diff(heading, p1, p2, p3):
     """
     Calculate the difference in heading at a specific index.
 
@@ -139,8 +139,10 @@ def calculate_heading_diff(heading, indices_before, indices_after):
     """
 
     # convert indices_before and indices_after to np.array if not already
-    indices_before = np.array(indices_before)
-    indices_after = np.array(indices_after)
+    p1, p2, p3 = int(p1), int(p2), int(p3)
+
+    indices_before = np.array(range(p1, p2))
+    indices_after = np.array(range(p2, p3))
 
     # check if indices are within range, raise error if not
     if np.any(indices_before < 0) or np.any(indices_before >= len(heading)):

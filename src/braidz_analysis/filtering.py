@@ -1,5 +1,5 @@
 import logging
-from typing import List, Tuple, Dict, Union
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -284,15 +284,69 @@ def apply_hysteresis_filter(
     return combined_segments
 
 
-def apply_mask(data: Dict[str, np.ndarray], mask: np.ndarray) -> Dict[str, np.ndarray]:
+def _combine_masks(*masks, method="and"):
     """
-    Applies a boolean mask to all arrays in the dictionary.
+    Combines multiple boolean masks using a specified logical operation.
 
     Args:
-        data: Dictionary of arrays where all arrays share the same first dimension k
-        mask: Boolean array of shape (k,) to apply to the first dimension of all arrays
+        *masks: Variable number of boolean numpy arrays (masks) of the same shape
+        method: String specifying the combination method ('and' or 'or')
+               'and': True only where all masks are True
+               'or': True where any mask is True
 
     Returns:
-        Dictionary with the same structure as input, with mask applied to all arrays
+        numpy.ndarray: Combined boolean mask of the same shape as input masks
+
+    Raises:
+        ValueError: If no masks are provided or if masks have different shapes
+        ValueError: If invalid method is specified
     """
-    return {key: data[key][mask] for key in data}
+    import numpy as np
+
+    # Validate that we have at least one mask
+    if not masks:
+        raise ValueError("At least one mask must be provided")
+
+    # Convert all masks to numpy arrays for consistent handling
+    masks = [np.array(mask, dtype=bool) for mask in masks]
+
+    # Validate that all masks have the same shape
+    first_shape = masks[0].shape
+    if not all(mask.shape == first_shape for mask in masks):
+        raise ValueError("All masks must have the same shape")
+
+    # Perform the combination based on the specified method
+    if method.lower() == "and":
+        # np.logical_and.reduce performs AND operation across all masks
+        return np.logical_and.reduce(masks)
+    elif method.lower() == "or":
+        # np.logical_or.reduce performs OR operation across all masks
+        return np.logical_or.reduce(masks)
+    else:
+        raise ValueError("Method must be either 'and' or 'or'")
+
+
+def apply_masks(data: Dict[str, np.ndarray], *masks) -> Dict[str, np.ndarray]:
+    """
+    Applies combined boolean masks to all arrays in a dictionary.
+
+    Args:
+        data: Dictionary where values are numpy arrays that the mask will be applied to
+        *masks: Variable number of boolean masks to be combined and applied
+
+    Returns:
+        Dictionary with the same keys but with masked arrays as values
+
+    Example:
+        >>> data = {'values': np.array([1, 2, 3, 4]), 'scores': np.array([10, 20, 30, 40])}
+        >>> mask1 = np.array([True, False, True, False])
+        >>> mask2 = np.array([True, True, False, False])
+        >>> result = apply_masks(data, mask1, mask2)
+        >>> print(result)
+        {'values': array([1]), 'scores': array([10])}
+    """
+    # Combine all provided masks into a single mask
+    combined_mask = _combine_masks(*masks)
+
+    # Apply the combined mask to each array in the dictionary
+    return {key: data[key][combined_mask] for key in data}
