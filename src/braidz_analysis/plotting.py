@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,7 +10,7 @@ def plot_angular_velocity(
     data: dict,
     ax: Optional[plt.Axes] = None,
     use_abs: bool = False,
-    baseline_range: list = [0, 50],
+    baseline_range: Union[list, Tuple, None] = None,
     shaded_region: list = [50, 80],
     convert_to_degrees: bool = False,
     **kwargs,
@@ -51,6 +51,7 @@ def plot_angular_velocity(
     ax.set_xlabel("Time (frames)")
     value = "deg" if convert_to_degrees else "radians"
     ax.set_ylabel(f"Angular Velocity ({value}/s)")
+    ax.set_xlim(0, velocity.shape[1])
     return ax
 
 
@@ -78,6 +79,7 @@ def plot_linear_velocity(
         )
     ax.set_xlabel("Time (frames)")
     ax.set_ylabel("Linear Velocity (m/s)")
+    ax.set_xlim(0, velocity.shape[1])
     return ax
 
 
@@ -268,3 +270,42 @@ def create_statistical_plot(
             ax = add_shaded_region(ax, start, end)
 
     return fig, ax
+
+
+def convert_frames_to_ms(ax: plt.Axes, fps: int = 100, step: int = 300) -> plt.Axes:
+    """Convert x-axis ticks from frames to milliseconds.
+
+    Args:
+        ax: Matplotlib axes to convert x-axis ticks
+        fps: Frames per second of the video. Default is 100.
+        step: Time step in milliseconds between ticks. Default is 300
+    
+    Returns:
+        plt.Axes: The axes object with updated x-axis ticks
+
+    Example:
+        >>> fig, ax = plt.subplots()
+        >>> ax.plot(data)  # data in frames (0-150)
+        >>> ax = convert_frames_to_ms(ax, fps=100, step=500)  # Will show ticks at 0, 500, 1000, 1500 ms
+    """
+    # Get current x-axis limits in frames
+    x_min, x_max = ax.get_xlim()
+    
+    # Convert frame limits to milliseconds
+    ms_min = (x_min / fps) * 1000
+    ms_max = (x_max / fps) * 1000
+    
+    # Create tick positions in milliseconds with the specified step
+    tick_positions_ms = np.arange(int(ms_min), int(ms_max) + step, step)
+    
+    # Convert millisecond positions back to frames for the axis
+    tick_positions_frames = (tick_positions_ms / 1000) * fps
+    
+    # Set new ticks and labels
+    ax.set_xticks(tick_positions_frames)
+    ax.set_xticklabels([f'{int(ms)}' for ms in tick_positions_ms])
+    
+    # Set x-axis label
+    ax.set_xlabel('Time (ms)')
+    
+    return ax

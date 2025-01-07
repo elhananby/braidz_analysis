@@ -75,6 +75,9 @@ def get_stim_or_opto_response_data(
         "sham": [],
         "reaction_delay": [],
         "responsive": [],
+        "intensity": [],
+        "duration": [],
+        "frequency": [],
     }
 
     for _, row in opto_or_stim.iterrows():
@@ -206,6 +209,9 @@ def get_stim_or_opto_data(
         "heading_difference": [],
         "frames_in_radius": [],
         "sham": [],
+        "intensity": [],
+        "duration": [],
+        "frequency": [],
     }
 
     for _, row in stim_or_opto.iterrows():
