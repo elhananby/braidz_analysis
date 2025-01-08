@@ -1,6 +1,6 @@
 [project]
 name = "braidz-analysis"
-version = "0.1.1"
+version = "0.2"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,7 +28,7 @@ braidz-analysis = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "pip-tools",
+    "pip-tools>=7.4.1",
     "pre-commit>=4.0.1",
     "ruff>=0.8.3",
     "braidz-analysis",

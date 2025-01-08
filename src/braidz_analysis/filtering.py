@@ -349,4 +349,36 @@ def apply_masks(data: Dict[str, np.ndarray], *masks) -> Dict[str, np.ndarray]:
     combined_mask = _combine_masks(*masks)
 
     # Apply the combined mask to each array in the dictionary
-    return {key: data[key][combined_mask] for key in data}
+    return {
+        key: data[key][combined_mask]
+        for key in data
+        if len(data[key]) == len(combined_mask)
+    }
+
+
+def filter_data_dict(data_dict, mask):
+    """
+    Filter a dictionary of arrays based on a boolean mask along the first dimension.
+
+    Args:
+        data_dict (dict): Dictionary containing arrays of different shapes
+        mask (ndarray): Boolean array matching the first dimension of data arrays
+
+    Returns:
+        dict: New dictionary with filtered arrays
+    """
+    filtered_dict = {}
+
+    for key, array in data_dict.items():
+        # Handle different dimensional data differently
+        if len(array.shape) == 1:
+            # For 1D arrays (like heading_difference, frames_in_radius, etc.)
+            filtered_dict[key] = array[mask]
+        elif len(array.shape) == 2:
+            # For 2D arrays (like angular_velocity, linear_velocity)
+            filtered_dict[key] = array[mask, :]
+        elif len(array.shape) == 3:
+            # For 3D arrays (like position)
+            filtered_dict[key] = array[mask, :, :]
+
+    return filtered_dict

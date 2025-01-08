@@ -172,6 +172,9 @@ def get_stim_or_opto_response_data(
             output_data["frames_in_radius"].append(frames_in_radius)
             output_data["sham"].append(row.get("sham", False))
             output_data["responsive"].append(peak_data["responsive"])
+            output_data["intensity"].append(row.get("intensity", np.nan))
+            output_data["duration"].append(row.get("duration", np.nan))
+            output_data["frequency"].append(row.get("frequency", np.nan))
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")
@@ -282,6 +285,9 @@ def get_stim_or_opto_data(
             opto_data["heading_difference"].append(heading_difference)
             opto_data["sham"].append(row.get("sham", False))
             opto_data["responsive"].append(responsive)
+            opto_data["intensity"].append(row.get("intensity", np.nan))
+            opto_data["duration"].append(row.get("duration", np.nan))
+            opto_data["frequency"].append(row.get("frequency", np.nan))
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")

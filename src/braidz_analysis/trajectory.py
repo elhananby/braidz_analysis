@@ -1,7 +1,8 @@
 import numpy as np
+from pynumdiff.smooth_finite_difference import butterdiff
 from scipy.signal import find_peaks, savgol_filter
 from scipy.stats import circmean
-from pynumdiff.smooth_finite_difference import butterdiff
+
 from .helpers import calculate_angle_between_three_points
 
 
@@ -20,57 +21,6 @@ def calculate_angular_velocity(xvel, yvel):
     theta_unwrap = np.unwrap(theta)
     _, angular_velocity = butterdiff(theta_unwrap, dt=0.01, params=[1, 0.1])
     return theta, angular_velocity
-
-
-def calculate_smoothed_linear_velocity(df):
-    """
-    Calculate smoothed linear velocity using Kalman uncertainties for adaptive smoothing.
-
-    Args:
-        df: DataFrame with columns xvel, yvel, zvel and P matrix elements
-
-    Returns:
-        ndarray: Smoothed linear velocities
-    """
-    # Extract velocities
-    xvel = df["xvel"].values
-    yvel = df["yvel"].values
-    zvel = df["zvel"].values
-
-    # Initialize smoothed arrays
-    smoothed_x = np.zeros_like(xvel)
-    smoothed_y = np.zeros_like(yvel)
-    smoothed_z = np.zeros_like(zvel)
-
-    # Initialize with first values
-    smoothed_x[0] = xvel[0]
-    smoothed_y[0] = yvel[0]
-    smoothed_z[0] = zvel[0]
-
-    # Set base_alpha based on typical uncertainty scale (mean + 1 std)
-    base_alpha = 1e-3  # Matched to order of magnitude of uncertainties
-
-    # Process each timestep
-    for i in range(1, len(df)):
-        # Extract velocity uncertainties from P matrix
-        vx_var = np.clip(df["P33"].iloc[i], 1e-6, 1e-1)  # Prevent extreme values
-        vy_var = np.clip(df["P44"].iloc[i], 1e-6, 1e-1)
-        vz_var = np.clip(df["P55"].iloc[i], 1e-6, 1e-1)
-
-        # Calculate adaptive smoothing factors
-        k_x = base_alpha / (base_alpha + vx_var)
-        k_y = base_alpha / (base_alpha + vy_var)
-        k_z = base_alpha / (base_alpha + vz_var)
-
-        # Update smoothed estimates with bounded coefficients
-        smoothed_x[i] = k_x * xvel[i] + (1 - k_x) * smoothed_x[i - 1]
-        smoothed_y[i] = k_y * yvel[i] + (1 - k_y) * smoothed_y[i - 1]
-        smoothed_z[i] = k_z * zvel[i] + (1 - k_z) * smoothed_z[i - 1]
-
-    # Calculate final linear velocity
-    linear_velocity = np.sqrt(smoothed_x**2 + smoothed_y**2 + smoothed_z**2)
-
-    return linear_velocity
 
 
 def calculate_linear_velocity(xvel, yvel, zvel=None):
