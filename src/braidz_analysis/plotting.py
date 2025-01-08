@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -223,6 +223,7 @@ def add_shaded_region(
         end,  # x end
         color=color,
         alpha=alpha,
+        linewidth=0,
         **kwargs,
     )
 
@@ -279,7 +280,7 @@ def convert_frames_to_ms(ax: plt.Axes, fps: int = 100, step: int = 300) -> plt.A
         ax: Matplotlib axes to convert x-axis ticks
         fps: Frames per second of the video. Default is 100.
         step: Time step in milliseconds between ticks. Default is 300
-    
+
     Returns:
         plt.Axes: The axes object with updated x-axis ticks
 
@@ -290,22 +291,104 @@ def convert_frames_to_ms(ax: plt.Axes, fps: int = 100, step: int = 300) -> plt.A
     """
     # Get current x-axis limits in frames
     x_min, x_max = ax.get_xlim()
-    
+
     # Convert frame limits to milliseconds
     ms_min = (x_min / fps) * 1000
     ms_max = (x_max / fps) * 1000
-    
+
     # Create tick positions in milliseconds with the specified step
     tick_positions_ms = np.arange(int(ms_min), int(ms_max) + step, step)
-    
+
     # Convert millisecond positions back to frames for the axis
     tick_positions_frames = (tick_positions_ms / 1000) * fps
-    
+
     # Set new ticks and labels
     ax.set_xticks(tick_positions_frames)
-    ax.set_xticklabels([f'{int(ms)}' for ms in tick_positions_ms])
-    
+    ax.set_xticklabels([f"{int(ms)}" for ms in tick_positions_ms])
+
     # Set x-axis label
-    ax.set_xlabel('Time (ms)')
-    
+    ax.set_xlabel("Time (ms)")
+
     return ax
+
+
+def plot_trajectory_with_arrows(
+    data: dict,
+    index: int,
+    opto_range: list = None,
+    ax: Optional[plt.Axes] = None,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plot the trajectory with arrows.
+
+    Args:
+        data (dict): The data containing the trajectory information.
+        index (int): The index of the trajectory to plot.
+        opto_range (list, optional): The range of indices to highlight with a different color. Defaults to None.
+        ax (Optional[plt.Axes], optional): The axes to plot on. If None, a new figure will be created. Defaults to None.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        plt.Axes: The axes object containing the plot.
+    """
+
+    # extract x and y coordinates
+    x = data["position"][index][:, 0]
+    y = data["position"][index][:, 1]
+
+    # create new figure if no axes provided
+    line = ax.plot(x, y, color="k")[0]
+    if opto_range:
+        ax.plot(
+            x[opto_range[0] : opto_range[1]],
+            y[opto_range[0] : opto_range[1]],
+            color="tab:red",
+        )
+    ax.axis("off")
+
+    for xi in range(0, len(x), kwargs.get("step", 5)):
+        if opto_range:
+            color = "tab:red" if xi in range(opto_range[0], opto_range[1]) else "k"
+        _add_arrow(line, position=x[xi], direction="right", size=5, color=color)
+
+    return ax
+
+
+def _add_arrow(line, position=None, direction="right", size=15, color=None):
+    """
+    Add an arrow to a line plot.
+
+    Parameters:
+    line (matplotlib.lines.Line2D): The line to add the arrow to.
+    position (float, optional): The x-coordinate of the arrow's starting position. If not provided, it will be set to the mean of the line's x-data.
+    direction (str, optional): The direction of the arrow. Can be 'right' or 'left'. Defaults to 'right'.
+    size (int, optional): The size of the arrow. Defaults to 15.
+    color (str, optional): The color of the arrow. If not provided, it will be set to the color of the line.
+
+    Returns:
+    None
+    """
+    if color is None:
+        color = line.get_color()
+
+    xdata = line.get_xdata()
+    ydata = line.get_ydata()
+
+    if position is None:
+        position = xdata.mean()
+
+    # find closest index
+    start_ind = np.argmin(np.absolute(xdata - position))
+    if direction == "right":
+        end_ind = start_ind + 1
+    else:
+        end_ind = start_ind - 1
+
+    line.axes.annotate(
+        "",
+        xytext=(xdata[start_ind], ydata[start_ind]),
+        xy=(xdata[end_ind], ydata[end_ind]),
+        arrowprops=dict(arrowstyle="->", color=color),
+        size=size,
+    )

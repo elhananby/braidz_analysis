@@ -28,9 +28,9 @@ def _find_relevant_peak(peaks, stim_idx, duration=30, return_none=False):
 
     for peak in peaks:
         if stim_idx < peak < window_end:
-            return int(peak)
+            return int(peak), True
 
-    return None if return_none else (stim_idx + duration // 2)
+    return None if return_none else (stim_idx + duration // 2), False
 
 
 def _smooth_df(
@@ -107,7 +107,7 @@ def get_stim_or_opto_response_data(
                 height=saccade_params.threshold,
                 distance=saccade_params.distance,
             )
-            peak = _find_relevant_peak(
+            peak, _ = _find_relevant_peak(
                 peaks, stim_idx, duration=params.duration, return_none=True
             )
 
@@ -212,6 +212,7 @@ def get_stim_or_opto_data(
         "intensity": [],
         "duration": [],
         "frequency": [],
+        "responsive": [],
     }
 
     for _, row in stim_or_opto.iterrows():
@@ -252,7 +253,7 @@ def get_stim_or_opto_data(
                 distance=saccade_params.distance,
             )
 
-            peak = _find_relevant_peak(
+            peak, responsive = _find_relevant_peak(
                 peaks,
                 stim_idx,
                 duration=params.duration,
@@ -280,6 +281,7 @@ def get_stim_or_opto_data(
             opto_data["frames_in_radius"].append(frames_in_radius)
             opto_data["heading_difference"].append(heading_difference)
             opto_data["sham"].append(row.get("sham", False))
+            opto_data["responsive"].append(responsive)
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")

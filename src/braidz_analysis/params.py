@@ -14,17 +14,25 @@ class SaccadeAnalysisParams:
 
 
 @dataclass
-class OptoAnalysisParams:
-    duration: float = 30.0
+class BaseAnalysisParams:
     min_frames: int = 150
     pre_frames: int = 50
     post_frames: int = 100
+
+    def __post_init__(self):
+        if self.pre_frames + self.post_frames > self.min_frames:
+            raise ValueError(
+                f"Total frame window ({self.pre_frames + self.post_frames}) "
+                f"cannot be larger than minimum frames ({self.min_frames})"
+            )
+
+
+@dataclass
+class OptoAnalysisParams(BaseAnalysisParams):
+    duration: float = 30.0
     radius: float = 0.025
 
 
 @dataclass
-class StimAnalysisParams:
+class StimAnalysisParams(BaseAnalysisParams):
     duration: float = 50.0
-    min_frames: int = 150
-    pre_frames: int = 50
-    post_frames: int = 100
