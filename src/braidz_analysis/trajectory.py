@@ -35,8 +35,16 @@ def calculate_linear_velocity(xvel, yvel, zvel=None):
     Returns:
         ndarray: Array of linear velocities.
     """
+
+    # convert all vels to numpy array if pandas series
+    xvel = np.array(xvel)
+    yvel = np.array(yvel)
+
     if zvel is None:
         zvel = np.zeros_like(xvel)
+    else:
+        zvel = np.array(zvel)
+        
     linear_velocity = np.sqrt(xvel**2 + yvel**2 + zvel**2)
     return linear_velocity
 

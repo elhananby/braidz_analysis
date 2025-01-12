@@ -13,7 +13,6 @@ from .trajectory import (
     calculate_angular_velocity,
     calculate_heading_diff,
     calculate_linear_velocity,
-    calculate_smoothed_linear_velocity,
     detect_saccades,
 )
 
@@ -22,7 +21,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def _find_relevant_peak(peaks, stim_idx, duration=30, return_none=False):
+def _find_relevant_peak(
+    peaks: Union[list, np.ndarray],
+    stim_idx: int,
+    duration: int = 30,
+    return_none: bool = False,
+):
     """Find first peak within the stimulus window."""
     window_end = stim_idx + duration
 
@@ -31,6 +35,30 @@ def _find_relevant_peak(peaks, stim_idx, duration=30, return_none=False):
             return int(peak), True
 
     return None if return_none else (stim_idx + duration // 2), False
+
+
+def _get_pre_saccade(
+    peaks: Union[list, np.ndarray], stim_idx: int, window: int = 100
+) -> int:
+    """
+    Get the closest peak before the stimulation event.
+
+    Args:
+        peaks: List of peak indices
+        stim_idx: Index of the stimulation event
+        window: Number of frames to search before the stimulation event
+
+    Returns:
+        peak: Index of the closest peak before the stimulation event
+    """
+    # Filter peaks that are within window before stim
+    valid_peaks = [p for p in peaks if stim_idx - window < p < stim_idx]
+
+    if not valid_peaks:
+        return None
+
+    # Find peak closest to stim_idx
+    return max(valid_peaks)
 
 
 def _smooth_df(
@@ -80,7 +108,7 @@ def get_stim_or_opto_response_data(
         "frequency": [],
     }
 
-    for _, row in opto_or_stim.iterrows():
+    for _, row in tqdm(opto_or_stim.iterrows(), total=len(opto_or_stim)):
         grp = df[
             (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
             if "exp_num" in row
@@ -107,6 +135,7 @@ def get_stim_or_opto_response_data(
                 height=saccade_params.threshold,
                 distance=saccade_params.distance,
             )
+
             peak, _ = _find_relevant_peak(
                 peaks, stim_idx, duration=params.duration, return_none=True
             )
@@ -211,6 +240,8 @@ def get_stim_or_opto_data(
         "position": [],
         "heading_difference": [],
         "frames_in_radius": [],
+        "pre_saccade_amplitude": [],
+        "pre_saccade_distance_from_stim_idx": [],
         "sham": [],
         "intensity": [],
         "duration": [],
@@ -218,7 +249,7 @@ def get_stim_or_opto_data(
         "responsive": [],
     }
 
-    for _, row in stim_or_opto.iterrows():
+    for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
         grp = df[
             (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
             if "exp_num" in row
@@ -248,14 +279,31 @@ def get_stim_or_opto_data(
             heading, angular_velocity = calculate_angular_velocity(
                 grp.xvel.values, grp.yvel.values
             )
-            linear_velocity = calculate_smoothed_linear_velocity(grp)
+            linear_velocity = calculate_linear_velocity(
+                grp.xvel.values, grp.yvel.values
+            )
 
+            # detect all saccades in the trajectory
             peaks = detect_saccades(
                 angular_velocity,
                 height=saccade_params.threshold,
                 distance=saccade_params.distance,
             )
 
+            # find saccades that happened before the stimulation event
+            pre_saccade_idx = _get_pre_saccade(
+                peaks,
+                stim_idx,
+            )
+
+            if pre_saccade_idx is not None:
+                pre_saccade_amplitude = angular_velocity[pre_saccade_idx]
+                pre_saccade_distance_from_stim_idx = pre_saccade_idx - stim_idx
+            else:
+                pre_saccade_amplitude = np.nan
+                pre_saccade_distance_from_stim_idx = np.nan
+
+            # find the first peak within the stimulus window
             peak, responsive = _find_relevant_peak(
                 peaks,
                 stim_idx,
@@ -288,6 +336,10 @@ def get_stim_or_opto_data(
             opto_data["intensity"].append(row.get("intensity", np.nan))
             opto_data["duration"].append(row.get("duration", np.nan))
             opto_data["frequency"].append(row.get("frequency", np.nan))
+            opto_data["pre_saccade_amplitude"].append(pre_saccade_amplitude)
+            opto_data["pre_saccade_distance_from_stim_idx"].append(
+                pre_saccade_distance_from_stim_idx
+            )
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")
@@ -314,10 +366,6 @@ def get_all_saccades(
         "linear_velocity": [],
         "position": [],
         "heading_difference": [],
-        "ISI": [],
-        "saccade_per_second": [],
-        "trajectory_duration": [],
-        "num_of_saccades": [],
     }
 
     for _, grp in tqdm(grouped_data, desc="Processing trajectories"):
@@ -326,33 +374,29 @@ def get_all_saccades(
         )
         linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
 
-        normalized_linear_velocity = linear_velocity / np.max(linear_velocity)
-        flight_bouts = apply_hysteresis_filter(normalized_linear_velocity)
+        peaks = detect_saccades(
+            angular_velocity,
+            height=params.threshold,
+            distance=params.distance,
+        )
 
-        for bout_indices in flight_bouts:
-            bout_angular_velocity = angular_velocity[bout_indices]
-            bout_saccades = detect_saccades(
-                bout_angular_velocity,
-                height=params.threshold,
-                distance=params.distance,
-            )
-            trajectory_saccades = bout_indices[bout_saccades]
-            good_saccades = []
+        x = savgol_filter(grp.x.values, 21, 3)
+        y = savgol_filter(grp.y.values, 21, 3)
+        z = savgol_filter(grp.z.values, 21, 3)
+        pos = np.column_stack((x, y, z))
+        
+        for sac in peaks:
+            if sac - params.pre_frames < 0 or sac + params.post_frames >= len(grp):
+                continue
 
-            for sac in trajectory_saccades:
-                if sac < params.pre_frames or sac + params.post_frames >= len(grp):
-                    continue
-
-                radius = np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2)
-                if not (
-                    radius < params.max_radius
-                    and params.zlim[0] < grp.z.iloc[sac] < params.zlim[1]
-                ):
-                    continue
-
+            if (
+                np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2) < params.max_radius
+                and params.zlim[0] < grp.z.iloc[sac] < params.zlim[1]
+            ):
                 range_to_extract = range(
                     sac - params.pre_frames, sac + params.post_frames
                 )
+
                 heading_difference = calculate_heading_diff(
                     heading,
                     sac - params.heading_diff_window,
@@ -367,91 +411,173 @@ def get_all_saccades(
                     linear_velocity[range_to_extract]
                 )
                 saccade_data["position"].append(
-                    grp[["x", "y", "z"]].values[range_to_extract]
+                    pos[range_to_extract, :]
                 )
                 saccade_data["heading_difference"].append(heading_difference)
-                good_saccades.append(sac)
-
-            bout_duration = (
-                grp.timestamp.iloc[bout_indices[-1]]
-                - grp.timestamp.iloc[bout_indices[0]]
-            )
-
-            if len(good_saccades) < 2:
-                saccade_data["ISI"].append(np.nan)
-                saccade_data["saccade_per_second"].append(np.nan)
-            else:
-                isis = np.diff(good_saccades)
-                valid_isis = isis[(isis > 1) & (isis < 500)]
-                saccade_data["ISI"].append(np.nanmean(valid_isis))
-                saccade_data["saccade_per_second"].append(
-                    len(good_saccades) / bout_duration
-                )
-
-            saccade_data["num_of_saccades"].append(len(good_saccades))
-            saccade_data["trajectory_duration"].append(bout_duration)
 
     return dict_list_to_numpy(saccade_data)
 
-
 def filter_trajectories(
     df: pd.DataFrame,
-    **kwargs: Optional[dict],
+    min_frames: int = 200,
+    z_bounds: tuple = (0.1, 0.3),
+    max_radius: float = 0.23,
+    required_cols: tuple = ('x', 'y', 'z', 'obj_id', 'exp_num')
 ) -> pd.DataFrame:
-    """Filter trajectory data based on length and spatial criteria.
+    """
+    Filter animal locomotor trajectories based on spatial and temporal criteria.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        High-resolution tracking data containing positional coordinates and metadata
+    min_frames : int
+        Minimum trajectory duration in frames for reliable behavioral analysis
+    z_bounds : tuple
+        Acceptable vertical position bounds (min, max) in normalized units
+    max_radius : float
+        Maximum allowed radial distance from origin in normalized units
+    required_cols : tuple
+        Required column names for trajectory analysis
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Filtered trajectories meeting all quality criteria for subsequent analysis
+    """
+    # Validate input data structure
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(f"Missing required columns: {required_cols}")
+    
+    zmin, zmax = z_bounds
+    good_grps = []
+    
+    # Create trajectory groups with progress bar
+    trajectory_groups = df.groupby(by=["obj_id", "exp_num"])
+    
+    # Iterate through trajectories with tqdm progress tracking
+    for (obj_id, exp_num), grp in tqdm(
+        trajectory_groups,
+        desc="Filtering trajectories",
+        total=len(trajectory_groups)
+    ):
+        if len(grp) < min_frames:
+            continue
+            
+        # Compute spatial metrics for quality assessment
+        radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
+        radius_median = np.nanmedian(radius)
+        z_median = np.nanmedian(grp.z)
+        
+        # Apply spatial filtering criteria
+        if (radius_median > max_radius) or (z_median < zmin) or (z_median > zmax):
+            continue
+            
+        good_grps.append(grp)
+    
+    if not good_grps:
+        logging.debug("No trajectories met the specified quality criteria")
+        return pd.DataFrame(columns=df.columns)
+        
+    return pd.concat(good_grps, ignore_index=True)
+
+def get_pre_saccade(
+    df: pd.DataFrame,
+    stim_or_opto: pd.DataFrame,
+    params: Optional[Union[OptoAnalysisParams, StimAnalysisParams]] = None,
+    type: Literal["opto", "stim"] = "opto",
+    saccade_params: Optional[SaccadeAnalysisParams] = None,
+) -> dict:
+    """Analyze stimulation data with parameter validation.
 
     Args:
         df: DataFrame containing trajectory data
-        saccade_params: Saccade detection parameters
-        trajectory_params: Trajectory analysis parameters including spatial bounds
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame containing only valid trajectories
+        stim_or_opto: DataFrame containing stimulation events
+        params: Analysis parameters. If None, uses defaults based on type
+        type: Either "opto" or "stim", used when params is None
+        saccade_params: Parameters for saccade detection
     """
-    # Define grouping columns
-    group_cols = ["obj_id", "exp_num"] if "exp_num" in df.columns else ["obj_id"]
+    if params is None:
+        params = OptoAnalysisParams() if type == "opto" else StimAnalysisParams()
 
-    # Calculate group statistics in a single pass
-    group_stats = (
-        df.groupby(group_cols)
-        .agg(
-            {
-                "x": "median",
-                "y": "median",
-                "z": "median",
-                "obj_id": "size",  # This gives us the length of each group
-            }
-        )
-        .rename(columns={"obj_id": "trajectory_length"})
-    )
+    if saccade_params is None:
+        saccade_params = SaccadeAnalysisParams()
 
-    # Create masks for each filtering criterion
-    length_mask = group_stats["trajectory_length"] >= kwargs.get("min_frames", 300)
+    results = {
+        "saccade_amplitude": [],
+        "saccade_direction": [],
+        "pre_saccade_amplitude": [],
+        "pre_saccade_direction": [],
+        "distance": [],
+        "responsive": [],
+    }
 
-    xlim = kwargs.get("xlim", [-0.23, 0.23])
-    x_median_mask = (group_stats["x"] > xlim[0]) & (group_stats["x"] < xlim[1])
-    ylim = kwargs.get("ylim", [-0.23, 0.23])
-    y_median_mask = (group_stats["y"] > ylim[0]) & (group_stats["y"] < ylim[1])
-    zlim = kwargs.get("zlim", [-0.1, 0.1])
-    z_median_mask = (group_stats["z"] > zlim[0]) & (group_stats["z"] < zlim[1])
+    for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
+        grp = df[
+            (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
+            if "exp_num" in row
+            else df["obj_id"] == row["obj_id"]
+        ]
 
-    # Combine all masks
-    valid_groups = group_stats[
-        length_mask & x_median_mask & y_median_mask & z_median_mask
-    ].index
+        if len(grp) < params.min_frames:
+            logger.debug(f"Skipping trajectory with {len(grp)} frames")
+            continue
 
-    # Log filtering results
-    total_groups = len(group_stats)
-    valid_group_count = len(valid_groups)
-    logger.info(f"Filtered {total_groups - valid_group_count} trajectories:")
-    logger.info(f"- {total_groups - length_mask.sum()} failed length criterion")
-    logger.info(
-        f"- {total_groups - (x_median_mask & y_median_mask & z_median_mask).sum()} failed spatial criteria"
-    )
-    logger.info(f"Retained {valid_group_count} valid trajectories")
+        try:
+            stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
 
-    # Filter the original DataFrame
-    if isinstance(valid_groups, pd.MultiIndex):
-        return df.set_index(group_cols).loc[valid_groups].reset_index()
-    else:
-        return df[df[group_cols[0]].isin(valid_groups)]
+            if stim_idx < params.pre_frames:
+                logger.debug("Skipping: insufficient preceding frames")
+                continue
+
+            heading, angular_velocity = calculate_angular_velocity(
+                grp.xvel.values, grp.yvel.values
+            )
+
+            # detect all saccades in the trajectory
+            peaks = detect_saccades(
+                angular_velocity,
+                height=saccade_params.threshold,
+                distance=saccade_params.distance,
+            )
+
+            saccade_peak_idx = np.nan
+
+            # find the first peak within the stimulus window
+            for peak in peaks:
+                if stim_idx < peak < stim_idx + params.duration:
+                    saccade_peak_idx = peak
+                    break
+
+            # find the closest peak before the stimulation event
+            pre_saccade_peak_idx = [
+                peak for peak in peaks if stim_idx - params.pre_frames < peak < stim_idx
+            ]
+            pre_saccade_peak_idx = (
+                np.max(pre_saccade_peak_idx) if pre_saccade_peak_idx else np.nan
+            )
+
+            # get amplitude for each
+            saccade_amplitude = angular_velocity[saccade_peak_idx]
+            pre_saccade_amplitude = angular_velocity[pre_saccade_peak_idx]
+
+            # get direction
+            saccade_direction = np.sign(angular_velocity[saccade_peak_idx])
+            pre_saccade_direction = np.sign(angular_velocity[pre_saccade_peak_idx])
+
+            # get distance from stim_idx
+            pre_saccade_distance = pre_saccade_peak_idx - stim_idx
+
+            # append to dict
+            results["saccade_amplitude"].append(saccade_amplitude)
+            results["saccade_direction"].append(saccade_direction)
+            results["pre_saccade_amplitude"].append(pre_saccade_amplitude)
+            results["pre_saccade_direction"].append(pre_saccade_direction)
+            results["distance"].append(pre_saccade_distance)
+            results["responsive"].append(not np.isnan(saccade_peak_idx))
+
+        except (IndexError, ValueError) as e:
+            logger.debug(f"Skipping trajectory: {str(e)}")
+            continue
+
+    return dict_list_to_numpy(results)
