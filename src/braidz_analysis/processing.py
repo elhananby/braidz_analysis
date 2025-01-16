@@ -235,6 +235,7 @@ def get_stim_or_opto_data(
         saccade_params = SaccadeAnalysisParams()
 
     opto_data = {
+        "timestamp": [],
         "angular_velocity": [],
         "linear_velocity": [],
         "position": [],
@@ -248,6 +249,8 @@ def get_stim_or_opto_data(
         "frequency": [],
         "responsive": [],
     }
+
+    first_frame = df["frame"].iloc[0]
 
     for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
         grp = df[
@@ -326,6 +329,7 @@ def get_stim_or_opto_data(
             else:
                 frames_in_radius = 0
 
+            opto_data["timestamp"].append((row["frame"] - first_frame)*0.01)
             opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
             opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
             opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
@@ -366,6 +370,7 @@ def get_all_saccades(
         "linear_velocity": [],
         "position": [],
         "heading_difference": [],
+        "timestamp": [],
     }
 
     for _, grp in tqdm(grouped_data, desc="Processing trajectories"):
@@ -384,7 +389,7 @@ def get_all_saccades(
         y = savgol_filter(grp.y.values, 21, 3)
         z = savgol_filter(grp.z.values, 21, 3)
         pos = np.column_stack((x, y, z))
-        
+        timestamps = []
         for sac in peaks:
             if sac - params.pre_frames < 0 or sac + params.post_frames >= len(grp):
                 continue
@@ -414,6 +419,10 @@ def get_all_saccades(
                     pos[range_to_extract, :]
                 )
                 saccade_data["heading_difference"].append(heading_difference)
+                timestamps.append(grp["timestamp"].iloc[sac])
+        
+        saccade_data["timestamp"].append(timestamps)
+        saccade_data["isi"].append(np.diff(timestamps))
 
     return dict_list_to_numpy(saccade_data)
 
