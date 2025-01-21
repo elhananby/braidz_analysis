@@ -9,7 +9,7 @@ from typing import Dict, List, Literal, Optional, Union
 
 import pandas as pd
 from typing_extensions import TypedDict
-import tqdm
+
 
 class EmptyKalmanError(Exception):
     """Raised when kalman_estimates.csv.gz is empty"""
@@ -177,7 +177,6 @@ def read_braidz(
     base_folder: Optional[str] = None,
     engine: Literal["pandas", "pyarrow", "auto"] = "auto",
     log_level: str = "info",
-    progressbar: bool = False,
 ) -> BraidzData:
     """
     Read data from one or more .braidz files.
@@ -232,60 +231,57 @@ def read_braidz(
 
     # Process each file
     skipped_files = []
+    for exp_num, filepath in enumerate(files):
+        logger.debug(f"Reading file: {filepath}")
 
-    with tqdm.tqdm(files, disable=not progressbar) as pbar:
-        for exp_num, filepath in enumerate(pbar):
-            logger.debug(f"Reading file: {filepath}")
-
-            try:
-                with zipfile.ZipFile(_open_filename_or_url(filepath), "r") as archive:
-                    # Read required kalman estimates
-                    try:
-                        kalman_df = _read_csv_safe(
-                            archive, CSVFiles.KALMAN, exp_num, engine
+        try:
+            with zipfile.ZipFile(_open_filename_or_url(filepath), "r") as archive:
+                # Read required kalman estimates
+                try:
+                    kalman_df = _read_csv_safe(
+                        archive, CSVFiles.KALMAN, exp_num, engine
+                    )
+                    if kalman_df is None:
+                        raise FileNotFoundError(
+                            f"{CSVFiles.KALMAN} not found in {filepath}"
                         )
-                        if kalman_df is None:
-                            raise FileNotFoundError(
-                                f"{CSVFiles.KALMAN} not found in {filepath}"
-                            )
-                        kalman_dfs.append(kalman_df)
-                    except EmptyKalmanError:
-                        logger.warning(f"Skipping {filepath} due to empty kalman estimates")
-                        skipped_files.append(filepath)
-                        continue
+                    kalman_dfs.append(kalman_df)
+                except EmptyKalmanError:
+                    logger.warning(f"Skipping {filepath} due to empty kalman estimates")
+                    skipped_files.append(filepath)
+                    continue
 
-                    # Read optional files
-                    opto_df = _read_csv_safe(archive, CSVFiles.OPTO, exp_num)
-                    if opto_df is not None:
-                        optos.append(opto_df)
+                # Read optional files
+                opto_df = _read_csv_safe(archive, CSVFiles.OPTO, exp_num)
+                if opto_df is not None:
+                    optos.append(opto_df)
 
-                    stim_df = _read_csv_safe(archive, CSVFiles.STIM, exp_num)
-                    if stim_df is not None:
-                        stims.append(stim_df)
+                stim_df = _read_csv_safe(archive, CSVFiles.STIM, exp_num)
+                if stim_df is not None:
+                    stims.append(stim_df)
 
-                    # Process other CSVs
-                    excluded_files = [CSVFiles.KALMAN, CSVFiles.OPTO, CSVFiles.STIM]
-                    other_csvs = _process_other_csvs(archive, excluded_files)
+                # Process other CSVs
+                excluded_files = [CSVFiles.KALMAN, CSVFiles.OPTO, CSVFiles.STIM]
+                other_csvs = _process_other_csvs(archive, excluded_files)
 
-                    # Merge other_csvs dictionaries
-                    for name, dfs in other_csvs.items():
-                        all_other_csvs.setdefault(name, []).extend(dfs)
-            except Exception as e:
-                logger.error(f"Error processing {filepath}: {str(e)}")
-                skipped_files.append(filepath)
-                continue
+                # Merge other_csvs dictionaries
+                for name, dfs in other_csvs.items():
+                    all_other_csvs.setdefault(name, []).extend(dfs)
+        except Exception as e:
+            logger.error(f"Error processing {filepath}: {str(e)}")
+            skipped_files.append(filepath)
+            continue
 
     if not kalman_dfs:
         raise ValueError("No valid kalman_estimates.csv.gz found in any of the files")
 
     # Combine results
-    result = {"df": pd.concat(kalman_dfs)}
-
-    if optos:
-        result["opto"] = pd.concat(optos)
-    if stims:
-        result["stim"] = pd.concat(stims)
-    if all_other_csvs:
-        result["other_csvs"] = all_other_csvs
-
-    return result
+    try:
+        return {
+            "df": pd.concat(kalman_dfs),
+            "opto": pd.concat(optos) if optos else None,
+            "stim": pd.concat(stims) if stims else None,
+            "other_csvs": all_other_csvs,
+        }
+    except ValueError:
+        raise ValueError("No valid kalman_estimates.csv.gz found in any of the files")
