@@ -183,9 +183,19 @@ def plot_heading_difference(
         value_range = [-180, 180]
 
     ax = plot_histogram(differences, ax=ax, bins=30, range=value_range, **kwargs)
-    value = "degrees" if convert_to_degrees else "radians"
-    ax.set_xlabel(f"Heading Difference ({value})")
-    ax.set_ylabel("Count")
+    
+    # Check if the axes is using polar projection
+    if hasattr(ax, 'projection') and getattr(ax.projection, 'name', None) == 'polar':
+        ax.set_theta_zero_location("N")
+        ax.set_xticks(np.deg2rad([0, 90, 180, 270]))
+        ax.set_xticklabels(["0", "+90", "±180", "-90"])
+        ax.set_yticklabels([])
+        ax.set_ylabel("")
+    else:
+        value = "degrees" if convert_to_degrees else "radians"
+        ax.set_xlabel(f"Heading Difference ({value})")
+        ax.set_ylabel("Count")
+    
     return ax
 
 
