@@ -6,6 +6,7 @@ import zipfile
 from dataclasses import dataclass
 from importlib.util import find_spec
 from typing import Dict, List, Literal, Optional, Union
+from tqdm import tqdm
 
 import pandas as pd
 from typing_extensions import TypedDict
@@ -171,12 +172,23 @@ def _process_other_csvs(
 
     return other_csvs
 
+def _convert_to_list(files):
+    if isinstance(files, str):
+        # Check if it's a comma-separated string
+        if ',' in files:
+            # Split by comma and strip whitespace
+            return [f.strip() for f in files.split(',')]
+        # Single file string
+        return [files]
+    # Already a list
+    return files
 
 def read_braidz(
     files: Union[str, List[str]],
     base_folder: Optional[str] = None,
     engine: Literal["pandas", "pyarrow", "auto"] = "auto",
     log_level: str = "info",
+    progressbar: bool = False,
 ) -> BraidzData:
     """
     Read data from one or more .braidz files.
@@ -209,8 +221,7 @@ def read_braidz(
     logger.setLevel(LOG_LEVELS[log_level])
 
     # Handle input validation and normalization
-    if isinstance(files, str):
-        files = [files]
+    files = _convert_to_list(files)
 
     if base_folder is not None:
         files = [os.path.join(base_folder, f) for f in files]
@@ -231,7 +242,7 @@ def read_braidz(
 
     # Process each file
     skipped_files = []
-    for exp_num, filepath in enumerate(files):
+    for exp_num, filepath in tqdm(enumerate(files), total=len(files), disable=not progressbar):
         logger.debug(f"Reading file: {filepath}")
 
         try:
