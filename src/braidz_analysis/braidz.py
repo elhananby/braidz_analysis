@@ -6,9 +6,9 @@ import zipfile
 from dataclasses import dataclass
 from importlib.util import find_spec
 from typing import Dict, List, Literal, Optional, Union
-from tqdm import tqdm
 
 import pandas as pd
+from tqdm import tqdm
 from typing_extensions import TypedDict
 
 
@@ -172,16 +172,35 @@ def _process_other_csvs(
 
     return other_csvs
 
+
 def _convert_to_list(files):
     if isinstance(files, str):
         # Check if it's a comma-separated string
-        if ',' in files:
+        if "," in files:
             # Split by comma and strip whitespace
-            return [f.strip() for f in files.split(',')]
+            return [f.strip() for f in files.split(",")]
         # Single file string
         return [files]
     # Already a list
     return files
+
+
+def _filter_df(df: pd.DataFrame, min_length: int = 100) -> pd.DataFrame:
+    """
+    Filter a DataFrame to remove groups with less than min_length rows.
+
+    Args:
+        df: Input DataFrame
+        min_length: Minimum number of rows to keep in each group
+
+    Returns:
+        Filtered DataFrame
+    """
+    groups = ["exp_num", "obj_id"] if "exp_num" in df.columns else ["obj_id"]
+    return (
+        df.groupby(groups).filter(lambda x: len(x) >= min_length).reset_index(drop=True)
+    )
+
 
 def read_braidz(
     files: Union[str, List[str]],
@@ -189,6 +208,7 @@ def read_braidz(
     engine: Literal["pandas", "pyarrow", "auto"] = "auto",
     log_level: str = "info",
     progressbar: bool = False,
+    pre_filter: bool = True,
 ) -> BraidzData:
     """
     Read data from one or more .braidz files.
@@ -199,6 +219,8 @@ def read_braidz(
         engine: CSV parsing engine to use ('pandas', 'pyarrow', or 'auto')
         log_level: Logging level to use (default: 'info'). Must be one of:
                   'debug', 'info', 'warning', 'error', or 'critical'
+        progressbar: Whether to show a progress bar (default: False)
+        pre_filter: Whether to filter out objects with less than 100 rows. This should improve memory usage when loading many files. (default: True)
 
     Returns:
         Dictionary containing combined data from all files:
@@ -242,7 +264,9 @@ def read_braidz(
 
     # Process each file
     skipped_files = []
-    for exp_num, filepath in tqdm(enumerate(files), total=len(files), disable=not progressbar):
+    for exp_num, filepath in tqdm(
+        enumerate(files), total=len(files), disable=not progressbar
+    ):
         logger.debug(f"Reading file: {filepath}")
 
         try:
@@ -256,7 +280,10 @@ def read_braidz(
                         raise FileNotFoundError(
                             f"{CSVFiles.KALMAN} not found in {filepath}"
                         )
-                    kalman_dfs.append(kalman_df)
+
+                    kalman_dfs.append(
+                        _filter_df(kalman_df) if pre_filter else kalman_df
+                    )
                 except EmptyKalmanError:
                     logger.warning(f"Skipping {filepath} due to empty kalman estimates")
                     skipped_files.append(filepath)
