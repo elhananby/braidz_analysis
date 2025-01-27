@@ -355,6 +355,7 @@ def get_stim_or_opto_data(
 def get_all_saccades(
     df: pd.DataFrame,
     params: Optional[SaccadeAnalysisParams] = None,
+    progressbar: bool = True,
 ) -> dict:
     """Extract and analyze all saccades from trajectory data."""
     if params is None:
@@ -371,9 +372,10 @@ def get_all_saccades(
         "position": [],
         "heading_difference": [],
         "timestamp": [],
+        "isi": [],
     }
 
-    for _, grp in tqdm(grouped_data, desc="Processing trajectories"):
+    for _, grp in tqdm(grouped_data, desc="Processing trajectories", disable=not progressbar):
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
         )
@@ -389,7 +391,9 @@ def get_all_saccades(
         y = savgol_filter(grp.y.values, 21, 3)
         z = savgol_filter(grp.z.values, 21, 3)
         pos = np.column_stack((x, y, z))
+        
         timestamps = []
+
         for sac in peaks:
             if sac - params.pre_frames < 0 or sac + params.post_frames >= len(grp):
                 continue
@@ -481,7 +485,10 @@ def filter_trajectories(
         # Apply spatial filtering criteria
         if (radius_median > max_radius) or (z_median < zmin) or (z_median > zmax):
             continue
-            
+        
+        if np.ptp(grp.x) < 0.05 or np.ptp(grp.y) < 0.05 or np.ptp(grp.z) < 0.05:
+            continue
+        
         good_grps.append(grp)
     
     if not good_grps:
@@ -497,7 +504,7 @@ def get_pre_saccade(
     type: Literal["opto", "stim"] = "opto",
     saccade_params: Optional[SaccadeAnalysisParams] = None,
 ) -> dict:
-    """Analyze stimulation data with parameter validation.
+    """Analyze pre-saccade data around stimulation events.
 
     Args:
         df: DataFrame containing trajectory data

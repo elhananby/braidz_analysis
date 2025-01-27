@@ -360,7 +360,7 @@ def plot_trajectory_with_arrows(
     for xi in range(0, len(x), kwargs.get("step", 5)):
         if opto_range:
             color = "tab:red" if xi in range(opto_range[0], opto_range[1]) else "k"
-        _add_arrow(line, position=x[xi], direction="right", size=5, color=color)
+        _add_arrow(line, position=x[xi], direction="right", size=kwargs.get("size", 5), color=color)
 
     return ax
 
@@ -399,6 +399,6 @@ def _add_arrow(line, position=None, direction="right", size=15, color=None):
         "",
         xytext=(xdata[start_ind], ydata[start_ind]),
         xy=(xdata[end_ind], ydata[end_ind]),
-        arrowprops=dict(arrowstyle="->", color=color),
+        arrowprops=dict(arrowstyle="-|>", color=color),
         size=size,
     )
