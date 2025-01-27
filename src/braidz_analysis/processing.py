@@ -253,10 +253,20 @@ def get_stim_or_opto_data(
     first_frame = df["frame"].iloc[0]
 
     for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
+
+        # convert to int if possible
+        try:
+            obj_id = int(row["obj_id"])
+            frame = int(row["frame"])
+            if "exp_num" in row:
+                exp_num = int(row["exp_num"])
+        except:
+            continue
+
         grp = df[
-            (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
+            (df["obj_id"] == obj_id) & (df["exp_num"] == exp_num)
             if "exp_num" in row
-            else df["obj_id"] == row["obj_id"]
+            else df["obj_id"] == obj_id
         ]
 
         if len(grp) < params.min_frames:
@@ -264,7 +274,7 @@ def get_stim_or_opto_data(
             continue
 
         try:
-            stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
+            stim_idx = np.where(grp["frame"] == frame)[0][0]
 
             if stim_idx < params.pre_frames:
                 logger.debug("Skipping: insufficient preceding frames")
@@ -329,13 +339,14 @@ def get_stim_or_opto_data(
             else:
                 frames_in_radius = 0
 
-            opto_data["timestamp"].append((row["frame"] - first_frame)*0.01)
+            opto_data["timestamp"].append((frame - first_frame)*0.01)
             opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
             opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
             opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
             opto_data["frames_in_radius"].append(frames_in_radius)
             opto_data["heading_difference"].append(heading_difference)
-            opto_data["sham"].append(row.get("sham", False))
+            opto_data["sham"].append(next((row[key] for key in ["sham", "is_sham"] 
+                                        if key in row), False))
             opto_data["responsive"].append(responsive)
             opto_data["intensity"].append(row.get("intensity", np.nan))
             opto_data["duration"].append(row.get("duration", np.nan))
