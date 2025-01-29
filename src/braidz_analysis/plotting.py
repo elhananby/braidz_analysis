@@ -12,6 +12,7 @@ def plot_angular_velocity(
     use_abs: bool = False,
     baseline_range: Union[list, Tuple, None] = None,
     shaded_region: list = [50, 80],
+    shaded_color: str = "tab:red",
     convert_to_degrees: bool = False,
     **kwargs,
 ) -> plt.Axes:
@@ -46,7 +47,7 @@ def plot_angular_velocity(
 
     if shaded_region is not None:
         ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color="tab:red", alpha=0.3
+            ax, shaded_region[0], shaded_region[1], color=shaded_color, alpha=0.3
         )
     ax.set_xlabel("Time (frames)")
     value = "deg" if convert_to_degrees else "radians"
@@ -56,7 +57,7 @@ def plot_angular_velocity(
 
 
 def plot_linear_velocity(
-    data: dict, ax: Optional[plt.Axes] = None, shaded_region: list = [50, 80], **kwargs
+    data: dict, ax: Optional[plt.Axes] = None, shaded_region: list = [50, 80], shaded_color: str = "tab:red", **kwargs
 ) -> plt.Axes:
     """
     Plots the linear velocity data.
@@ -75,7 +76,7 @@ def plot_linear_velocity(
 
     if shaded_region is not None:
         ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color="tab:red", alpha=0.3
+            ax, shaded_region[0], shaded_region[1], color=shaded_color, alpha=0.3
         )
     ax.set_xlabel("Time (frames)")
     ax.set_ylabel("Linear Velocity (m/s)")
@@ -243,7 +244,7 @@ def add_shaded_region(
 
 def create_statistical_plot(
     data: np.ndarray,
-    highlight_regions: Optional[list[Tuple[int, int]]] = None,
+    highlight_regions: Optional['list[Tuple[int, int]]'] = None,
     **kwargs,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """Create a complete statistical plot with mean, std, and optional highlighted regions.
