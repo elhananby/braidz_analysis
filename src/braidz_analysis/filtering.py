@@ -201,7 +201,7 @@ def filter_by_frames_in_radius(
 
     # Middle bins
     for i in range(len(thresholds) - 1):
-        key = f"{thresholds[i]}-{thresholds[i+1]}"
+        key = f"{thresholds[i]}-{thresholds[i + 1]}"
         masks[key] = (frames > thresholds[i]) & (frames <= thresholds[i + 1])
 
     # Last bin

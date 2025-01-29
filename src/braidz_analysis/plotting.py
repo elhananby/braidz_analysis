@@ -46,7 +46,7 @@ def plot_angular_velocity(
 
     if shaded_region is not None:
         ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color="gray", alpha=0.3
+            ax, shaded_region[0], shaded_region[1], color="tab:red", alpha=0.3
         )
     ax.set_xlabel("Time (frames)")
     value = "deg" if convert_to_degrees else "radians"
@@ -75,7 +75,7 @@ def plot_linear_velocity(
 
     if shaded_region is not None:
         ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color="gray", alpha=0.3
+            ax, shaded_region[0], shaded_region[1], color="tab:red", alpha=0.3
         )
     ax.set_xlabel("Time (frames)")
     ax.set_ylabel("Linear Velocity (m/s)")
@@ -162,6 +162,7 @@ def plot_heading_difference(
     ax: Optional[plt.Axes] = None,
     convert_to_degrees: bool = False,
     value_range: list = [-np.pi, np.pi],
+    bins=36,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -182,10 +183,10 @@ def plot_heading_difference(
         differences = np.rad2deg(differences)
         value_range = [-180, 180]
 
-    ax = plot_histogram(differences, ax=ax, bins=30, range=value_range, **kwargs)
-    
+    ax = plot_histogram(differences, ax=ax, bins=bins, range=value_range, **kwargs)
+
     # Check if the axes is using polar projection
-    if hasattr(ax, 'projection') and getattr(ax.projection, 'name', None) == 'polar':
+    if hasattr(ax, "projection") and getattr(ax.projection, "name", None) == "polar":
         ax.set_theta_zero_location("N")
         ax.set_xticks(np.deg2rad([0, 90, 180, 270]))
         ax.set_xticklabels(["0", "+90", "±180", "-90"])
@@ -195,7 +196,7 @@ def plot_heading_difference(
         value = "degrees" if convert_to_degrees else "radians"
         ax.set_xlabel(f"Heading Difference ({value})")
         ax.set_ylabel("Count")
-    
+
     return ax
 
 
@@ -360,7 +361,13 @@ def plot_trajectory_with_arrows(
     for xi in range(0, len(x), kwargs.get("step", 5)):
         if opto_range:
             color = "tab:red" if xi in range(opto_range[0], opto_range[1]) else "k"
-        _add_arrow(line, position=x[xi], direction="right", size=kwargs.get("size", 5), color=color)
+        _add_arrow(
+            line,
+            position=x[xi],
+            direction="right",
+            size=kwargs.get("size", 5),
+            color=color,
+        )
 
     return ax
 

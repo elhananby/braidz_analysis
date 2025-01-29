@@ -6,7 +6,6 @@ import pandas as pd
 from scipy.signal import savgol_filter
 from tqdm import tqdm
 
-from .filtering import apply_hysteresis_filter
 from .helpers import dict_list_to_numpy
 from .params import OptoAnalysisParams, SaccadeAnalysisParams, StimAnalysisParams
 from .trajectory import (
@@ -253,7 +252,6 @@ def get_stim_or_opto_data(
     first_frame = df["frame"].iloc[0]
 
     for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
-
         # convert to int if possible
         try:
             obj_id = int(row["obj_id"])
@@ -339,14 +337,15 @@ def get_stim_or_opto_data(
             else:
                 frames_in_radius = 0
 
-            opto_data["timestamp"].append((frame - first_frame)*0.01)
+            opto_data["timestamp"].append((frame - first_frame) * 0.01)
             opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
             opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
             opto_data["position"].append(grp[["x", "y", "z"]].values[range_to_extract])
             opto_data["frames_in_radius"].append(frames_in_radius)
             opto_data["heading_difference"].append(heading_difference)
-            opto_data["sham"].append(next((row[key] for key in ["sham", "is_sham"] 
-                                        if key in row), False))
+            opto_data["sham"].append(
+                next((row[key] for key in ["sham", "is_sham"] if key in row), False)
+            )
             opto_data["responsive"].append(responsive)
             opto_data["intensity"].append(row.get("intensity", np.nan))
             opto_data["duration"].append(row.get("duration", np.nan))
@@ -386,7 +385,9 @@ def get_all_saccades(
         "isi": [],
     }
 
-    for _, grp in tqdm(grouped_data, desc="Processing trajectories", disable=not progressbar):
+    for _, grp in tqdm(
+        grouped_data, desc="Processing trajectories", disable=not progressbar
+    ):
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
         )
@@ -402,7 +403,7 @@ def get_all_saccades(
         y = savgol_filter(grp.y.values, 21, 3)
         z = savgol_filter(grp.z.values, 21, 3)
         pos = np.column_stack((x, y, z))
-        
+
         timestamps = []
 
         for sac in peaks:
@@ -430,27 +431,26 @@ def get_all_saccades(
                 saccade_data["linear_velocity"].append(
                     linear_velocity[range_to_extract]
                 )
-                saccade_data["position"].append(
-                    pos[range_to_extract, :]
-                )
+                saccade_data["position"].append(pos[range_to_extract, :])
                 saccade_data["heading_difference"].append(heading_difference)
                 timestamps.append(grp["timestamp"].iloc[sac])
-        
+
         saccade_data["timestamp"].append(timestamps)
         saccade_data["isi"].append(np.diff(timestamps))
 
     return dict_list_to_numpy(saccade_data)
+
 
 def filter_trajectories(
     df: pd.DataFrame,
     min_frames: int = 200,
     z_bounds: tuple = (0.1, 0.3),
     max_radius: float = 0.23,
-    required_cols: tuple = ('x', 'y', 'z', 'obj_id', 'exp_num')
+    required_cols: tuple = ("x", "y", "z", "obj_id", "exp_num"),
 ) -> pd.DataFrame:
     """
     Filter animal locomotor trajectories based on spatial and temporal criteria.
-    
+
     Parameters:
     -----------
     df : pd.DataFrame
@@ -463,7 +463,7 @@ def filter_trajectories(
         Maximum allowed radial distance from origin in normalized units
     required_cols : tuple
         Required column names for trajectory analysis
-        
+
     Returns:
     --------
     pd.DataFrame
@@ -472,41 +472,40 @@ def filter_trajectories(
     # Validate input data structure
     if not all(col in df.columns for col in required_cols):
         raise ValueError(f"Missing required columns: {required_cols}")
-    
+
     zmin, zmax = z_bounds
     good_grps = []
-    
+
     # Create trajectory groups with progress bar
     trajectory_groups = df.groupby(by=["obj_id", "exp_num"])
-    
+
     # Iterate through trajectories with tqdm progress tracking
     for (obj_id, exp_num), grp in tqdm(
-        trajectory_groups,
-        desc="Filtering trajectories",
-        total=len(trajectory_groups)
+        trajectory_groups, desc="Filtering trajectories", total=len(trajectory_groups)
     ):
         if len(grp) < min_frames:
             continue
-            
+
         # Compute spatial metrics for quality assessment
         radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
         radius_median = np.nanmedian(radius)
         z_median = np.nanmedian(grp.z)
-        
+
         # Apply spatial filtering criteria
         if (radius_median > max_radius) or (z_median < zmin) or (z_median > zmax):
             continue
-        
+
         if np.ptp(grp.x) < 0.05 or np.ptp(grp.y) < 0.05 or np.ptp(grp.z) < 0.05:
             continue
-        
+
         good_grps.append(grp)
-    
+
     if not good_grps:
         logging.debug("No trajectories met the specified quality criteria")
         return pd.DataFrame(columns=df.columns)
-        
+
     return pd.concat(good_grps, ignore_index=True)
+
 
 def get_pre_saccade(
     df: pd.DataFrame,
