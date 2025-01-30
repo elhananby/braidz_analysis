@@ -108,10 +108,19 @@ def get_stim_or_opto_response_data(
     }
 
     for _, row in tqdm(opto_or_stim.iterrows(), total=len(opto_or_stim)):
+        try:
+            row_obj_id = int(row["obj_id"])
+            if "exp_num" in row:
+                row_exp_num = int(row["exp_num"])
+            row_frame = int(row["frame"])
+        # if can't convert to int, skip
+        except ValueError:
+            continue
+
         grp = df[
-            (df["obj_id"] == row["obj_id"]) & (df["exp_num"] == row["exp_num"])
+            (df["obj_id"] == row_obj_id) & (df["exp_num"] == row_exp_num)
             if "exp_num" in row
-            else df["obj_id"] == row["obj_id"]
+            else df["obj_id"] == row_obj_id
         ]
 
         if len(grp) < params.min_frames:
@@ -119,7 +128,7 @@ def get_stim_or_opto_response_data(
             continue
 
         try:
-            stim_idx = np.where(grp["frame"] == row["frame"])[0][0]
+            stim_idx = np.where(grp["frame"] == row_frame)[0][0]
             grp = _smooth_df(grp, ["x", "y", "z"])
 
             heading, angular_velocity = calculate_angular_velocity(
@@ -139,45 +148,43 @@ def get_stim_or_opto_response_data(
                 peaks, stim_idx, duration=params.duration, return_none=True
             )
 
-            # Initialize empty arrays
-            peak_data = {
-                "angular_velocity": np.full(
-                    params.pre_frames + params.post_frames, np.nan
-                ),
-                "linear_velocity": np.full(
-                    params.pre_frames + params.post_frames, np.nan
-                ),
-                "position": np.full(
-                    (params.pre_frames + params.post_frames, 3), np.nan
-                ),
-                "heading_difference": np.nan,
-                "reaction_delay": np.nan,
-                "responsive": False,
-            }
+            # Calculate the center point for analysis
+            if peak is not None:
+                center_idx = peak
+                is_responsive = True
+            else:
+                # Use stim_idx + duration as center when no peak is detected
+                center_idx = stim_idx + int(params.duration)
+                is_responsive = False
 
+            # Check if we have enough frames around the center point
             if (
-                peak is not None
-                and params.pre_frames <= peak < len(grp) - params.post_frames
+                center_idx < params.pre_frames
+                or center_idx >= len(grp) - params.post_frames
             ):
-                range_to_extract = range(
-                    peak - params.pre_frames, peak + params.post_frames
+                logger.debug(
+                    "Skipping trajectory: insufficient frames around center point"
                 )
+                continue
 
-                peak_data.update(
-                    {
-                        "angular_velocity": angular_velocity[range_to_extract],
-                        "linear_velocity": linear_velocity[range_to_extract],
-                        "position": grp[["x", "y", "z"]].to_numpy()[range_to_extract],
-                        "heading_difference": calculate_heading_diff(
-                            heading,
-                            peak - saccade_params.heading_diff_window,
-                            peak,
-                            peak + saccade_params.heading_diff_window,
-                        ),
-                        "reaction_delay": peak - stim_idx,
-                        "responsive": True,
-                    }
-                )
+            # Extract data around center point
+            range_to_extract = range(
+                center_idx - params.pre_frames, center_idx + params.post_frames
+            )
+
+            peak_data = {
+                "angular_velocity": angular_velocity[range_to_extract],
+                "linear_velocity": linear_velocity[range_to_extract],
+                "position": grp[["x", "y", "z"]].to_numpy()[range_to_extract],
+                "heading_difference": calculate_heading_diff(
+                    heading,
+                    center_idx - saccade_params.heading_diff_window,
+                    center_idx,
+                    center_idx + saccade_params.heading_diff_window,
+                ),
+                "reaction_delay": center_idx - stim_idx,
+                "responsive": is_responsive,
+            }
 
             # Calculate radius-based metrics
             if hasattr(params, "radius"):

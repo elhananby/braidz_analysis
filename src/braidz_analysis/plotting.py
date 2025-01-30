@@ -57,7 +57,11 @@ def plot_angular_velocity(
 
 
 def plot_linear_velocity(
-    data: dict, ax: Optional[plt.Axes] = None, shaded_region: list = [50, 80], shaded_color: str = "tab:red", **kwargs
+    data: dict,
+    ax: Optional[plt.Axes] = None,
+    shaded_region: list = [50, 80],
+    shaded_color: str = "tab:red",
+    **kwargs,
 ) -> plt.Axes:
     """
     Plots the linear velocity data.
@@ -158,6 +162,53 @@ def plot_histogram(
     return ax
 
 
+def plot_heading_difference_alternative(
+    data: dict,
+    ax: Optional[plt.Axes] = None,
+    convert_to_degrees: bool = False,
+    value_range: list = [-np.pi, np.pi],
+    bins=36,
+    **kwargs,
+):
+    ax.grid(zorder=0)  # Grid in background
+    bin_edges = np.linspace(
+        value_range[0], value_range[1], bins + 1
+    )  # 37 to get 36 bins (n+1 edges for n bins)
+
+    # Manual normalization
+    hist1, _ = np.histogram(
+        data["heading_difference"], bins=bin_edges, **kwargs.get("density", True)
+    )
+
+    # Normalize to make peaks similar heights
+    hist1_norm = hist1 / hist1.max()
+
+    # Plot the normalized histograms
+    ax.bar(
+        bin_edges[:-1], hist1_norm, width=np.diff(bin_edges), alpha=0.5, color="black"
+    )
+    # Check if the axes is using polar projection
+    try:
+        ax.set_theta_zero_location("N")
+    except AttributeError:
+        pass
+
+    if convert_to_degrees:
+        xticks = np.deg2rad([0, 90, 180, 270])
+        xticklabels = ["0", "+90", "±180", "-90"]
+    else:
+        xticks = np.linspace(-np.pi, np.pi, 4)
+        xticklabels = ["-π", "-π/2", "π", "π/2"]
+
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xticklabels)
+    ax.set_yticklabels([])
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+
+    return ax
+
+
 def plot_heading_difference(
     data: dict,
     ax: Optional[plt.Axes] = None,
@@ -244,7 +295,7 @@ def add_shaded_region(
 
 def create_statistical_plot(
     data: np.ndarray,
-    highlight_regions: Optional['list[Tuple[int, int]]'] = None,
+    highlight_regions: Optional["list[Tuple[int, int]]"] = None,
     **kwargs,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """Create a complete statistical plot with mean, std, and optional highlighted regions.
