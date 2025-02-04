@@ -543,6 +543,7 @@ def get_pre_saccade(
         "pre_saccade_direction": [],
         "distance": [],
         "responsive": [],
+        "frames_in_radius": [],
     }
 
     for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
@@ -590,6 +591,14 @@ def get_pre_saccade(
                 np.max(pre_saccade_peak_idx) if pre_saccade_peak_idx else np.nan
             )
 
+            if hasattr(params, "radius"):
+                radius = np.sqrt(grp.x.values**2 + grp.y.values**2)
+                frames_in_radius = np.sum(
+                    radius[stim_idx : stim_idx + int(params.duration)] < params.radius
+                )
+            else:
+                frames_in_radius = 0
+
             # get amplitude for each
             saccade_amplitude = angular_velocity[saccade_peak_idx]
             pre_saccade_amplitude = angular_velocity[pre_saccade_peak_idx]
@@ -608,6 +617,7 @@ def get_pre_saccade(
             results["pre_saccade_direction"].append(pre_saccade_direction)
             results["distance"].append(pre_saccade_distance)
             results["responsive"].append(not np.isnan(saccade_peak_idx))
+            results["frames_in_radius"].append(frames_in_radius)
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")

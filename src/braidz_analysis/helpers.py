@@ -1,6 +1,7 @@
 from typing import Tuple, Union
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 
 # Type aliases for clarity
 Point2D = Union[Tuple[float, float], npt.NDArray[np.float64]]
@@ -167,3 +168,41 @@ def subtract_baseline(arr: np.ndarray, start_idx: int, end_idx: int) -> np.ndarr
     baseline = np.nanmean(arr[:, start_idx:end_idx], axis=1)
     normalized_data = arr - baseline[:, np.newaxis]
     return normalized_data
+
+
+def create_grouped_df(
+    groups: list[str], data: list[np.ndarray], key: str
+) -> pd.DataFrame:
+    """
+    Create a DataFrame combining multiple groups of data into a long format.
+
+    Args:
+        groups: List of group labels
+        data: List of numpy arrays containing the data for each group
+        key: Name of the column for the concatenated data
+
+    Returns:
+        pd.DataFrame with two columns: 'Group' and the specified key column
+
+    Example:
+        >>> groups = ['A', 'B']
+        >>> data = [np.array([1, 2]), np.array([3, 4, 5])]
+        >>> create_grouped_df(groups, data, 'Values')
+           Group  Values
+        0     A      1
+        1     A      2
+        2     B      3
+        3     B      4
+        4     B      5
+    """
+    if len(groups) != len(data):
+        raise ValueError("Length of groups must match length of data arrays")
+
+    return pd.DataFrame(
+        {
+            "Group": [
+                group for group, arr in zip(groups, data) for _ in range(len(arr[key]))
+            ],
+            key: np.concatenate([d[key] for d in data]),
+        }
+    )

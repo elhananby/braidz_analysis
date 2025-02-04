@@ -1,9 +1,10 @@
 from typing import Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
 
-from .helpers import get_mean_and_std, subtract_baseline
+from .helpers import get_mean_and_std, subtract_baseline, create_grouped_df
 
 
 def plot_angular_velocity(
@@ -176,16 +177,20 @@ def plot_heading_difference_alternative(
     )  # 37 to get 36 bins (n+1 edges for n bins)
 
     # Manual normalization
-    hist1, _ = np.histogram(
-        data["heading_difference"], bins=bin_edges, **kwargs.get("density", True)
-    )
+    density = kwargs.get("density", True)
+    color = kwargs.get("color", "black")
+    hist1, _ = np.histogram(data["heading_difference"], bins=bin_edges, density=density)
 
     # Normalize to make peaks similar heights
     hist1_norm = hist1 / hist1.max()
 
     # Plot the normalized histograms
     ax.bar(
-        bin_edges[:-1], hist1_norm, width=np.diff(bin_edges), alpha=0.5, color="black"
+        bin_edges[:-1],
+        hist1_norm,
+        width=np.diff(bin_edges),
+        alpha=0.5,
+        color=color,
     )
     # Check if the axes is using polar projection
     try:
@@ -193,17 +198,34 @@ def plot_heading_difference_alternative(
     except AttributeError:
         pass
 
-    if convert_to_degrees:
-        xticks = np.deg2rad([0, 90, 180, 270])
-        xticklabels = ["0", "+90", "±180", "-90"]
-    else:
-        xticks = np.linspace(-np.pi, np.pi, 4)
-        xticklabels = ["-π", "-π/2", "π", "π/2"]
+    return ax
 
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(xticklabels)
-    ax.set_yticklabels([])
-    ax.set_xlabel("")
+
+def plot_heading_difference_as_violin_plot(
+    groups: list[str],
+    data: list[dict],
+    ax: Optional[plt.Axes] = None,
+    colors: list = "tab10",
+):
+    hd_df = create_grouped_df(
+        groups=groups,
+        data=data,
+        key="heading_difference",
+    )
+    sns.violinplot(
+        data=hd_df,
+        y="Group",
+        x="heading_difference",
+        ax=ax,
+        hue="Group",
+        palette=colors,
+    )
+
+    ax.yaxis.tick_right()
+    ax.tick_params(axis="y", which="major", length=0)
+    ax.set_xticks((-np.pi, 0, np.pi))
+    ax.set_xticklabels(("-180", "0", "180"))
+    # sns.despine(ax=ax, trim=True)
     ax.set_ylabel("")
 
     return ax
