@@ -345,7 +345,16 @@ def get_stim_or_opto_data(
             else:
                 frames_in_radius = 0
 
-            opto_data["raw_timestamp"].append(row["timestamp"])
+            if "timestamp" in row:
+                raw_timestamp = row["timestamp"]
+            else:
+                raw_timestamp = df[
+                    (df["obj_id"] == obj_id)
+                    & (df["exp_num"] == exp_num)
+                    & (df["frame"] == frame)
+                ].iloc[0]["timestamp"]
+
+            opto_data["raw_timestamp"].append(raw_timestamp)
             opto_data["timestamp"].append((frame - first_frame) * 0.01)
             opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
             opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
