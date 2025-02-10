@@ -6,7 +6,7 @@ import pandas as pd
 from scipy.signal import savgol_filter
 from tqdm import tqdm
 
-from .helpers import dict_list_to_numpy
+from .helpers import detect_flight_states, dict_list_to_numpy
 from .params import OptoAnalysisParams, SaccadeAnalysisParams, StimAnalysisParams
 from .trajectory import (
     calculate_angular_velocity,
@@ -344,6 +344,7 @@ def get_stim_or_opto_data(
             else:
                 frames_in_radius = 0
 
+            opto_data["raw_timestamp"].append(row["timestamp"])
             opto_data["timestamp"].append((frame - first_frame) * 0.01)
             opto_data["angular_velocity"].append(angular_velocity[range_to_extract])
             opto_data["linear_velocity"].append(linear_velocity[range_to_extract])
@@ -395,52 +396,62 @@ def get_all_saccades(
     for _, grp in tqdm(
         grouped_data, desc="Processing trajectories", disable=not progressbar
     ):
+        # get full trajectory parameters
+        linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
         heading, angular_velocity = calculate_angular_velocity(
             grp.xvel.values, grp.yvel.values
         )
-        linear_velocity = calculate_linear_velocity(grp.xvel.values, grp.yvel.values)
+        x = savgol_filter(grp.x.values, 21, 3)
+        y = savgol_filter(grp.y.values, 21, 3)
+        z = savgol_filter(grp.z.values, 21, 3)
+        pos = np.column_stack((x, y, z))
 
+        # Detect flight states
+        flight_idx = detect_flight_states(linear_velocity)
+        if flight_idx.sum() < 100:
+            continue
+
+        # Filter out non-flight states from all data
+        linear_velocity = linear_velocity[flight_idx]
+        angular_velocity = angular_velocity[flight_idx]
+        pos = pos[flight_idx, :]
+        grp_timestamp = grp["timestamp"].values[flight_idx]
+        heading = heading[flight_idx]
+
+        # detect saccades in filtered data
         peaks = detect_saccades(
             angular_velocity,
             height=params.threshold,
             distance=params.distance,
         )
 
-        x = savgol_filter(grp.x.values, 21, 3)
-        y = savgol_filter(grp.y.values, 21, 3)
-        z = savgol_filter(grp.z.values, 21, 3)
-        pos = np.column_stack((x, y, z))
-
+        # initialize empty timestamps list
         timestamps = []
 
+        # loop over all saccades
         for sac in peaks:
-            if sac - params.pre_frames < 0 or sac + params.post_frames >= len(grp):
+            if sac - params.pre_frames < 0 or sac + params.post_frames >= len(
+                linear_velocity
+            ):
                 continue
 
-            if (
-                np.sqrt(grp.x.iloc[sac] ** 2 + grp.y.iloc[sac] ** 2) < params.max_radius
-                and params.zlim[0] < grp.z.iloc[sac] < params.zlim[1]
-            ):
-                range_to_extract = range(
-                    sac - params.pre_frames, sac + params.post_frames
-                )
+            # define range to extract
+            range_to_extract = range(sac - params.pre_frames, sac + params.post_frames)
 
-                heading_difference = calculate_heading_diff(
-                    heading,
-                    sac - params.heading_diff_window,
-                    sac,
-                    sac + params.heading_diff_window,
-                )
+            # claculate saccade heading difference
+            heading_difference = calculate_heading_diff(
+                heading,
+                sac - params.heading_diff_window,
+                sac,
+                sac + params.heading_diff_window,
+            )
 
-                saccade_data["angular_velocity"].append(
-                    angular_velocity[range_to_extract]
-                )
-                saccade_data["linear_velocity"].append(
-                    linear_velocity[range_to_extract]
-                )
-                saccade_data["position"].append(pos[range_to_extract, :])
-                saccade_data["heading_difference"].append(heading_difference)
-                timestamps.append(grp["timestamp"].iloc[sac])
+            # append all data from window
+            saccade_data["angular_velocity"].append(angular_velocity[range_to_extract])
+            saccade_data["linear_velocity"].append(linear_velocity[range_to_extract])
+            saccade_data["position"].append(pos[range_to_extract, :])
+            saccade_data["heading_difference"].append(heading_difference)
+            timestamps.append(grp_timestamp[sac])
 
         saccade_data["timestamp"].append(timestamps)
         saccade_data["isi"].append(np.diff(timestamps))
@@ -450,7 +461,7 @@ def get_all_saccades(
 
 def filter_trajectories(
     df: pd.DataFrame,
-    min_frames: int = 200,
+    min_frames: int = 300,
     z_bounds: tuple = (0.1, 0.3),
     max_radius: float = 0.23,
     required_cols: tuple = ("x", "y", "z", "obj_id", "exp_num"),
@@ -544,6 +555,7 @@ def get_pre_saccade(
         "distance": [],
         "responsive": [],
         "frames_in_radius": [],
+        "sham": [],
     }
 
     for _, row in tqdm(stim_or_opto.iterrows(), total=len(stim_or_opto)):
@@ -616,6 +628,9 @@ def get_pre_saccade(
             results["pre_saccade_amplitude"].append(pre_saccade_amplitude)
             results["pre_saccade_direction"].append(pre_saccade_direction)
             results["distance"].append(pre_saccade_distance)
+            results["sham"].append(
+                next((row[key] for key in ["sham", "is_sham"] if key in row), False)
+            )
             results["responsive"].append(not np.isnan(saccade_peak_idx))
             results["frames_in_radius"].append(frames_in_radius)
 

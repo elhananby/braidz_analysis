@@ -128,7 +128,8 @@ def plot_mean_and_std(
         range(len(mean)),  # x coordinates
         mean - std,  # lower bound
         mean + std,  # upper bound
-        alpha=0.3,  # transparency of fill
+        linewidth=0,
+        alpha=kwargs.get("alpha", 0.3),  # transparency of fill
         **kwargs,
     )
 
@@ -400,16 +401,20 @@ def convert_frames_to_ms(ax: plt.Axes, fps: int = 100, step: int = 300) -> plt.A
 def plot_trajectory_with_arrows(
     data: dict,
     index: int,
+    dim1: str = "x",
+    dim2: str = "y",
     opto_range: list = None,
     ax: Optional[plt.Axes] = None,
     **kwargs,
 ) -> plt.Axes:
     """
-    Plot the trajectory with arrows.
+    Plot the trajectory with arrows for any 2D combination of dimensions.
 
     Args:
         data (dict): The data containing the trajectory information.
         index (int): The index of the trajectory to plot.
+        dim1 (str): First dimension to plot (e.g., 'x', 'y', 'z'). Defaults to 'x'.
+        dim2 (str): Second dimension to plot (e.g., 'x', 'y', 'z'). Defaults to 'y'.
         opto_range (list, optional): The range of indices to highlight with a different color. Defaults to None.
         ax (Optional[plt.Axes], optional): The axes to plot on. If None, a new figure will be created. Defaults to None.
         **kwargs: Additional keyword arguments.
@@ -417,31 +422,56 @@ def plot_trajectory_with_arrows(
     Returns:
         plt.Axes: The axes object containing the plot.
     """
+    # Create dimension mapping
+    dim_mapping = {"x": 0, "y": 1, "z": 2}
 
-    # extract x and y coordinates
-    x = data["position"][index][:, 0]
-    y = data["position"][index][:, 1]
+    # Validate dimensions
+    if dim1 not in dim_mapping or dim2 not in dim_mapping:
+        raise ValueError("Dimensions must be 'x', 'y', or 'z'")
+    if dim1 == dim2:
+        raise ValueError("Dimensions must be different")
 
-    # create new figure if no axes provided
-    line = ax.plot(x, y, color="k")[0]
+    # Extract coordinates for the specified dimensions
+    coord1 = data["position"][index][:, dim_mapping[dim1]]
+    coord2 = data["position"][index][:, dim_mapping[dim2]]
+
+    # Create new figure if no axes provided
+    if ax is None:
+        _, ax = plt.subplots()
+
+    # Plot the main trajectory
+    line = ax.plot(coord1, coord2, color="k")[0]
+
+    # Plot highlighted range if specified
     if opto_range:
         ax.plot(
-            x[opto_range[0] : opto_range[1]],
-            y[opto_range[0] : opto_range[1]],
+            coord1[opto_range[0] : opto_range[1]],
+            coord2[opto_range[0] : opto_range[1]],
             color="tab:red",
+            linewidth=kwargs.get("linewidth", 1),
         )
     ax.axis("off")
 
-    for xi in range(0, len(x), kwargs.get("step", 5)):
+    # Add arrows
+    step = kwargs.get("step", 5)
+    for i in range(0, len(coord1), step):
         if opto_range:
-            color = "tab:red" if xi in range(opto_range[0], opto_range[1]) else "k"
+            color = "tab:red" if i in range(opto_range[0], opto_range[1]) else "k"
+        else:
+            color = "k"
+
         _add_arrow(
             line,
-            position=x[xi],
+            position=coord1[i],
             direction="right",
-            size=kwargs.get("size", 5),
+            size=kwargs.get("arrow_size", 5),
             color=color,
         )
+
+    # Optional: Add labels
+    if kwargs.get("show_labels", False):
+        ax.set_xlabel(dim1)
+        ax.set_ylabel(dim2)
 
     return ax
 

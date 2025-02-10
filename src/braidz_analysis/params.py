@@ -5,7 +5,7 @@ import numpy as np
 @dataclass
 class SaccadeAnalysisParams:
     threshold: float = np.deg2rad(300)
-    distance: int = 10
+    distance: int = 50
     heading_diff_window: int = 10
     pre_frames: int = 50
     post_frames: int = 50

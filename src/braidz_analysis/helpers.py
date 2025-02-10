@@ -206,3 +206,40 @@ def create_grouped_df(
             key: np.concatenate([d[key] for d in data]),
         }
     )
+
+
+def detect_flight_states(
+    linvel, fps=100, high_thresh=0.05, low_thresh=0.01, min_sustained_frames=20
+):
+    import pandas as pd
+
+    # Parameters
+    window_size = int(fps)  # 1 second window
+
+    # Calculate rolling statistics
+    rolling_mean = pd.Series(linvel).rolling(window_size, center=True).mean()
+    rolling_std = pd.Series(linvel).rolling(window_size, center=True).std()
+
+    # Combined score
+    score = rolling_mean  # + rolling_std
+
+    # State machine with hysteresis
+    states = np.zeros_like(linvel)
+    state = 0  # walking
+    count = 0
+
+    for i in range(len(score)):
+        if state == 0 and score[i] > high_thresh:
+            count += 1
+        elif state == 1 and score[i] < low_thresh:
+            count += 1
+        else:
+            count = 0
+
+        if count >= min_sustained_frames:
+            state = 1 if state == 0 else 0
+            count = 0
+
+        states[i] = state
+
+    return np.array(states, dtype=bool)
