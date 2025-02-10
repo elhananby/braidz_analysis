@@ -241,6 +241,7 @@ def get_stim_or_opto_data(
         saccade_params = SaccadeAnalysisParams()
 
     opto_data = {
+        "raw_timestamps": [],
         "timestamp": [],
         "angular_velocity": [],
         "linear_velocity": [],
