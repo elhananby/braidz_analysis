@@ -255,6 +255,7 @@ def get_stim_or_opto_data(
         "duration": [],
         "frequency": [],
         "responsive": [],
+        "reaction_delay": [],
     }
 
     first_frame = df["frame"].iloc[0]
@@ -372,6 +373,7 @@ def get_stim_or_opto_data(
             opto_data["pre_saccade_distance_from_stim_idx"].append(
                 pre_saccade_distance_from_stim_idx
             )
+            opto_data["reaction_delay"].append(peak - stim_idx)
 
         except (IndexError, ValueError) as e:
             logger.debug(f"Skipping trajectory: {str(e)}")

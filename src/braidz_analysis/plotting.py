@@ -405,6 +405,7 @@ def plot_trajectory_with_arrows(
     dim2: str = "y",
     opto_range: list = None,
     ax: Optional[plt.Axes] = None,
+    normalize: bool = True,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -434,6 +435,11 @@ def plot_trajectory_with_arrows(
     # Extract coordinates for the specified dimensions
     coord1 = data["position"][index][:, dim_mapping[dim1]]
     coord2 = data["position"][index][:, dim_mapping[dim2]]
+
+    # normalzie to -1 to 1
+    if normalize:
+        coord1 = ((coord1 - coord1.min()) / (coord1.max() - coord1.min())) * 2 - 1
+        coord2 = ((coord2 - coord2.min()) / (coord2.max() - coord2.min())) * 2 - 1
 
     # Create new figure if no axes provided
     if ax is None:
