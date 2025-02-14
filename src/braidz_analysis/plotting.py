@@ -130,7 +130,6 @@ def plot_mean_and_std(
         mean + std,  # upper bound
         linewidth=0,
         alpha=kwargs.get("alpha", 0.3),  # transparency of fill
-        **kwargs,
     )
 
     return ax

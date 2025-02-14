@@ -316,9 +316,9 @@ def read_braidz(
     # Combine results
     try:
         return {
-            "df": pd.concat(kalman_dfs),
-            "opto": pd.concat(optos) if optos else None,
-            "stim": pd.concat(stims) if stims else None,
+            "df": pd.concat(kalman_dfs).reset_index(drop=True),
+            "opto": pd.concat(optos).reset_index(drop=True) if optos else None,
+            "stim": pd.concat(stims).reset_index(drop=True) if stims else None,
             "other_csvs": all_other_csvs,
         }
     except ValueError:
