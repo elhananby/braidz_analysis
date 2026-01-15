@@ -1,280 +1,505 @@
-from typing import Optional, Tuple, Union
+"""
+Plotting module for braidz analysis visualization.
+
+Provides functions for creating publication-quality plots of:
+    - Response traces (angular velocity, linear velocity)
+    - Heading change distributions
+    - Trajectory visualizations
+    - Summary statistics
+
+All plotting functions accept result objects from the analysis module
+and return matplotlib axes for further customization.
+"""
+
+from typing import List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
+import seaborn as sns
 
-from .helpers import get_mean_and_std, subtract_baseline, create_grouped_df
+from .analysis import EventResults, SaccadeResults
 
 
-def plot_angular_velocity(
-    data: dict,
+# =============================================================================
+# Utility Functions
+# =============================================================================
+
+
+def _get_mean_and_std(arr: np.ndarray, axis: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute mean and standard deviation, ignoring NaN values."""
+    return np.nanmean(arr, axis=axis), np.nanstd(arr, axis=axis)
+
+
+def _subtract_baseline(
+    arr: np.ndarray, start: int, end: int
+) -> np.ndarray:
+    """Subtract baseline (mean of range) from each row."""
+    baseline = np.nanmean(arr[:, start:end], axis=1)
+    return arr - baseline[:, np.newaxis]
+
+
+# =============================================================================
+# Trace Plotting
+# =============================================================================
+
+
+def plot_traces(
+    results: Union[SaccadeResults, EventResults],
+    trace_type: str = "angular_velocity",
     ax: Optional[plt.Axes] = None,
     use_abs: bool = False,
-    baseline_range: Union[list, Tuple, None] = None,
-    shaded_region: list = [50, 80],
-    shaded_color: str = "tab:red",
-    convert_to_degrees: bool = False,
+    baseline_range: Optional[Tuple[int, int]] = None,
+    convert_to_degrees: bool = True,
+    color: Optional[str] = None,
+    label: Optional[str] = None,
+    alpha: float = 0.3,
     **kwargs,
 ) -> plt.Axes:
     """
-    Plots the angular velocity data.
+    Plot mean trace with standard deviation envelope.
 
     Args:
-        data (dict): A dictionary containing the angular velocity data.
-        ax (Optional[plt.Axes], optional): The matplotlib Axes object to plot on. If not provided, a new figure and axes will be created. Defaults to None.
-        use_abs (bool, optional): Whether to use the absolute values of the angular velocity. Defaults to False.
-        baseline_range (list, optional): The range of indices to use for baseline subtraction. Only applicable if use_abs is True. Defaults to [0, 50].
-        shaded_region (list, optional): The range of indices to shade in the plot. Defaults to [50, 80].
-        convert_to_degrees (bool, optional): Whether to convert the angular velocity to degrees. Defaults to False.
+        results: SaccadeResults or EventResults object.
+        trace_type: Which trace to plot ('angular_velocity', 'linear_velocity').
+        ax: Matplotlib axes. Creates new if None.
+        use_abs: Use absolute values (for angular velocity).
+        baseline_range: (start, end) frames for baseline subtraction.
+        convert_to_degrees: Convert angular velocity to degrees.
+        color: Line color.
+        label: Legend label.
+        alpha: Transparency for std envelope.
+        **kwargs: Additional arguments for ax.plot().
 
     Returns:
-        plt.Axes: The matplotlib Axes object containing the plot.
+        Matplotlib axes with the plot.
+
+    Example:
+        >>> plot_traces(opto_results, trace_type='angular_velocity')
+        >>> plot_traces(opto_results.responsive, color='red', label='Responsive')
     """
-    velocity = data["angular_velocity"]
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 4))
 
-    if baseline_range and not use_abs:
-        raise ValueError("Baseline subtraction requires absolute values (use_abs=True)")
+    # Get trace data
+    if trace_type not in results.traces:
+        raise ValueError(f"Unknown trace type: {trace_type}. Available: {list(results.traces.keys())}")
 
-    elif use_abs:
-        velocity = np.abs(velocity)
-        if baseline_range:
-            velocity = subtract_baseline(velocity, *baseline_range)
+    data = results.traces[trace_type].copy()
 
-    if convert_to_degrees:
-        velocity = np.rad2deg(velocity)
+    if len(data) == 0:
+        return ax
 
-    ax = plot_mean_and_std(velocity, ax=ax, **kwargs)
+    # Process data
+    if use_abs:
+        data = np.abs(data)
+        if baseline_range is not None:
+            data = _subtract_baseline(data, baseline_range[0], baseline_range[1])
+    elif baseline_range is not None:
+        raise ValueError("Baseline subtraction requires use_abs=True")
 
-    if shaded_region is not None:
-        ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color=shaded_color, alpha=0.3
-        )
-    ax.set_xlabel("Time (frames)")
-    value = "deg" if convert_to_degrees else "radians"
-    ax.set_ylabel(f"Angular Velocity ({value}/s)")
-    ax.set_xlim(0, velocity.shape[1])
+    if trace_type == "angular_velocity" and convert_to_degrees:
+        data = np.degrees(data)
+
+    # Compute statistics
+    mean, std = _get_mean_and_std(data)
+
+    # Plot
+    x = np.arange(len(mean))
+    line = ax.plot(x, mean, color=color, label=label, **kwargs)[0]
+    ax.fill_between(
+        x,
+        mean - std,
+        mean + std,
+        color=line.get_color(),
+        alpha=alpha,
+        linewidth=0,
+    )
+
+    # Labels
+    if trace_type == "angular_velocity":
+        unit = "deg/s" if convert_to_degrees else "rad/s"
+        ylabel = f"Angular Velocity ({unit})"
+        if use_abs:
+            ylabel = f"|Angular Velocity| ({unit})"
+    else:
+        ylabel = "Linear Velocity (m/s)"
+
+    ax.set_xlabel("Frames")
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(0, len(mean))
+
+    return ax
+
+
+def plot_angular_velocity(
+    results: Union[SaccadeResults, EventResults],
+    ax: Optional[plt.Axes] = None,
+    use_abs: bool = True,
+    baseline_range: Optional[Tuple[int, int]] = (0, 50),
+    stimulus_range: Optional[Tuple[int, int]] = (50, 80),
+    stimulus_color: str = "tab:red",
+    convert_to_degrees: bool = True,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plot angular velocity traces with optional stimulus highlight.
+
+    A convenience wrapper around plot_traces() with common defaults
+    for event-triggered analysis.
+
+    Args:
+        results: Analysis results object.
+        ax: Matplotlib axes.
+        use_abs: Use absolute values (default True).
+        baseline_range: Frames for baseline subtraction.
+        stimulus_range: Frames to highlight as stimulus period.
+        stimulus_color: Color for stimulus highlight.
+        convert_to_degrees: Convert to degrees.
+        **kwargs: Additional arguments for plot_traces().
+
+    Returns:
+        Matplotlib axes.
+    """
+    ax = plot_traces(
+        results,
+        trace_type="angular_velocity",
+        ax=ax,
+        use_abs=use_abs,
+        baseline_range=baseline_range,
+        convert_to_degrees=convert_to_degrees,
+        **kwargs,
+    )
+
+    if stimulus_range is not None:
+        add_stimulus_region(ax, stimulus_range[0], stimulus_range[1], color=stimulus_color)
+
     return ax
 
 
 def plot_linear_velocity(
-    data: dict,
+    results: Union[SaccadeResults, EventResults],
     ax: Optional[plt.Axes] = None,
-    shaded_region: list = [50, 80],
-    shaded_color: str = "tab:red",
+    stimulus_range: Optional[Tuple[int, int]] = (50, 80),
+    stimulus_color: str = "tab:red",
     **kwargs,
 ) -> plt.Axes:
     """
-    Plots the linear velocity data.
-
-    Parameters:
-        data (dict): A dictionary containing the data.
-        ax (Optional[plt.Axes]): The matplotlib Axes object to plot on. If None, a new figure and axes will be created.
-        shaded_region (list): A list specifying the range of the shaded region. Default is [50, 80].
-
-    Returns:
-        plt.Axes: The matplotlib Axes object with the plotted data.
-    """
-
-    velocity = data["linear_velocity"]
-    ax = plot_mean_and_std(velocity, ax=ax, **kwargs)
-
-    if shaded_region is not None:
-        ax = add_shaded_region(
-            ax, shaded_region[0], shaded_region[1], color=shaded_color, alpha=0.3
-        )
-    ax.set_xlabel("Time (frames)")
-    ax.set_ylabel("Linear Velocity (m/s)")
-    ax.set_xlim(0, velocity.shape[1])
-    return ax
-
-
-def plot_mean_and_std(
-    arr: np.ndarray, ax: Optional[plt.Axes] = None, **kwargs
-) -> plt.Axes:
-    """Plot mean with standard deviation envelope.
-
-    Creates a line plot of the mean values with a shaded region representing
-    ±1 standard deviation around the mean.
+    Plot linear velocity traces with optional stimulus highlight.
 
     Args:
-        arr: Input array of shape (n_samples, n_timepoints) to calculate statistics from
-        ax: Matplotlib axes to plot on. If None, creates new figure and axes
-        **kwargs: Additional keyword arguments passed to both plot() and fill_between()
-                 (e.g., color, label, linewidth)
+        results: Analysis results object.
+        ax: Matplotlib axes.
+        stimulus_range: Frames to highlight as stimulus period.
+        stimulus_color: Color for stimulus highlight.
+        **kwargs: Additional arguments for plot_traces().
 
     Returns:
-        plt.Axes: The axes object containing the plot
-
-    Example:
-        >>> data = np.random.randn(100, 10)  # 100 samples, 10 timepoints
-        >>> ax = plot_mean_and_std(data, color='blue', label='Group A')
+        Matplotlib axes.
     """
-    # Calculate statistics across samples (first dimension)
-    mean, std = get_mean_and_std(arr)
-
-    # Create new figure if no axes provided
-    if ax is None:
-        _, ax = plt.subplots()
-
-    # Plot mean line
-    ax.plot(mean, **kwargs)
-
-    # remove `label` from kwargs to avoid passing it to fill_between
-    kwargs.pop("label", None)
-
-    # Add standard deviation envelope
-    ax.fill_between(
-        range(len(mean)),  # x coordinates
-        mean - std,  # lower bound
-        mean + std,  # upper bound
-        linewidth=0,
-        alpha=kwargs.get("alpha", 0.3),  # transparency of fill
+    ax = plot_traces(
+        results,
+        trace_type="linear_velocity",
+        ax=ax,
+        **kwargs,
     )
 
-    return ax
-
-
-def plot_histogram(
-    arr: np.ndarray, ax: Optional[plt.Axes] = None, **kwargs
-) -> plt.Axes:
-    """Create a histogram of the input array.
-
-    Args:
-        arr: Input array of values to create histogram from
-        ax: Matplotlib axes to plot on. If None, creates new figure and axes
-        **kwargs: Additional keyword arguments passed to hist()
-                 (e.g., bins, density, color, alpha)
-
-    Returns:
-        plt.Axes: The axes object containing the histogram
-
-    Example:
-        >>> data = np.random.randn(1000)
-        >>> ax = plot_histogram(data, bins=30, color='red', alpha=0.7)
-    """
-    # Create new figure if no axes provided
-    if ax is None:
-        _, ax = plt.subplots()
-
-    # Create histogram
-    ax.hist(arr, **kwargs)
+    if stimulus_range is not None:
+        add_stimulus_region(ax, stimulus_range[0], stimulus_range[1], color=stimulus_color)
 
     return ax
 
 
-def plot_heading_difference_alternative(
-    data: dict,
+# =============================================================================
+# Heading Change Plots
+# =============================================================================
+
+
+def plot_heading_distribution(
+    results: Union[SaccadeResults, EventResults],
     ax: Optional[plt.Axes] = None,
     convert_to_degrees: bool = False,
-    value_range: list = [-np.pi, np.pi],
-    bins=36,
+    bins: int = 36,
+    polar: bool = False,
+    density: bool = True,
     **kwargs,
-):
-    ax.grid(zorder=0)  # Grid in background
-    bin_edges = np.linspace(
-        value_range[0], value_range[1], bins + 1
-    )  # 37 to get 36 bins (n+1 edges for n bins)
+) -> plt.Axes:
+    """
+    Plot histogram of heading changes.
 
-    # Manual normalization
-    density = kwargs.get("density", True)
-    color = kwargs.get("color", "black")
-    hist1, _ = np.histogram(data["heading_difference"], bins=bin_edges, density=density)
+    Args:
+        results: Analysis results object.
+        ax: Matplotlib axes. Creates polar axes if polar=True and ax=None.
+        convert_to_degrees: Convert to degrees for display.
+        bins: Number of histogram bins.
+        polar: Use polar projection.
+        density: Normalize as density.
+        **kwargs: Additional arguments for histogram.
 
-    # Normalize to make peaks similar heights
-    hist1_norm = hist1 / hist1.max()
+    Returns:
+        Matplotlib axes.
 
-    # Plot the normalized histograms
-    ax.bar(
-        bin_edges[:-1],
-        hist1_norm,
-        width=np.diff(bin_edges),
-        alpha=0.5,
-        color=color,
-    )
-    # Check if the axes is using polar projection
-    try:
+    Example:
+        >>> # Standard histogram
+        >>> plot_heading_distribution(results)
+
+        >>> # Polar plot
+        >>> plot_heading_distribution(results, polar=True)
+    """
+    # Get heading changes
+    heading_changes = results.metrics["heading_change"].dropna().values
+
+    if len(heading_changes) == 0:
+        if ax is None:
+            _, ax = plt.subplots()
+        return ax
+
+    # Set up value range
+    if convert_to_degrees:
+        heading_changes = np.degrees(heading_changes)
+        value_range = (-180, 180)
+    else:
+        value_range = (-np.pi, np.pi)
+
+    # Create axes
+    if ax is None:
+        if polar:
+            _, ax = plt.subplots(subplot_kw={"projection": "polar"})
+        else:
+            _, ax = plt.subplots()
+
+    # Plot histogram
+    if polar:
+        # For polar plots, use bar chart
+        hist, bin_edges = np.histogram(heading_changes, bins=bins, range=value_range, density=density)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        width = np.diff(bin_edges)[0]
+
+        if not convert_to_degrees:
+            ax.bar(bin_centers, hist, width=width, alpha=0.7, **kwargs)
+        else:
+            ax.bar(np.radians(bin_centers), hist, width=np.radians(width), alpha=0.7, **kwargs)
+
         ax.set_theta_zero_location("N")
-    except AttributeError:
-        pass
+        ax.set_theta_direction(-1)
+    else:
+        ax.hist(heading_changes, bins=bins, range=value_range, density=density, **kwargs)
+        unit = "degrees" if convert_to_degrees else "radians"
+        ax.set_xlabel(f"Heading Change ({unit})")
+        ax.set_ylabel("Density" if density else "Count")
 
     return ax
 
 
-def plot_heading_difference_as_violin_plot(
-    groups: list[str],
-    data: list[dict],
+def plot_heading_comparison(
+    groups: List[str],
+    results_list: List[Union[SaccadeResults, EventResults]],
     ax: Optional[plt.Axes] = None,
-    colors: list = "tab10",
-):
-    hd_df = create_grouped_df(
-        groups=groups,
-        data=data,
-        key="heading_difference",
-    )
+    colors: Union[str, List[str]] = "tab10",
+) -> plt.Axes:
+    """
+    Compare heading change distributions across groups using violin plots.
+
+    Args:
+        groups: List of group names.
+        results_list: List of result objects (one per group).
+        ax: Matplotlib axes.
+        colors: Color palette name or list of colors.
+
+    Returns:
+        Matplotlib axes.
+
+    Example:
+        >>> plot_heading_comparison(
+        ...     ["Control", "Opto"],
+        ...     [control_results, opto_results]
+        ... )
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 4))
+
+    # Build DataFrame for seaborn
+    data = []
+    for group, results in zip(groups, results_list):
+        hc = results.metrics["heading_change"].dropna().values
+        for val in hc:
+            data.append({"Group": group, "Heading Change": val})
+
+    import pandas as pd
+
+    df = pd.DataFrame(data)
+
+    # Plot
     sns.violinplot(
-        data=hd_df,
+        data=df,
+        x="Heading Change",
         y="Group",
-        x="heading_difference",
         ax=ax,
         hue="Group",
         palette=colors,
+        legend=False,
     )
 
-    ax.yaxis.tick_right()
-    ax.tick_params(axis="y", which="major", length=0)
-    ax.set_xticks((-np.pi, 0, np.pi))
-    ax.set_xticklabels(("-180", "0", "180"))
-    # sns.despine(ax=ax, trim=True)
-    ax.set_ylabel("")
+    ax.axvline(0, color="gray", linestyle="--", alpha=0.5)
+    ax.set_xticks([-np.pi, 0, np.pi])
+    ax.set_xticklabels(["-180°", "0°", "+180°"])
 
     return ax
 
 
-def plot_heading_difference(
-    data: dict,
+# =============================================================================
+# Trajectory Visualization
+# =============================================================================
+
+
+def plot_trajectory(
+    results: Union[SaccadeResults, EventResults],
+    index: int,
+    dims: Tuple[str, str] = ("x", "y"),
     ax: Optional[plt.Axes] = None,
-    convert_to_degrees: bool = False,
-    value_range: list = [-np.pi, np.pi],
-    bins=36,
+    highlight_range: Optional[Tuple[int, int]] = None,
+    highlight_color: str = "tab:red",
+    show_arrows: bool = True,
+    arrow_spacing: int = 5,
+    normalize: bool = True,
     **kwargs,
 ) -> plt.Axes:
     """
-    Plots the histogram of heading differences.
+    Plot a single trajectory in 2D.
 
     Args:
-        data (dict): The data dictionary containing the heading differences.
-        ax (Optional[plt.Axes]): The matplotlib Axes object to plot on. If not provided, a new figure and axes will be created.
-        convert_to_degrees (bool): Whether to convert the heading differences to degrees. Default is False.
-        value_range (list): The range of values to display on the x-axis. Default is [-np.pi, np.pi].
+        results: Analysis results object.
+        index: Index of trajectory to plot.
+        dims: Tuple of dimensions ('x', 'y', or 'z').
+        ax: Matplotlib axes.
+        highlight_range: Frame range to highlight (e.g., stimulus period).
+        highlight_color: Color for highlighted portion.
+        show_arrows: Add direction arrows.
+        arrow_spacing: Frames between arrows.
+        normalize: Normalize coordinates to [-1, 1].
+        **kwargs: Additional arguments for plot().
 
     Returns:
-        plt.Axes: The matplotlib Axes object containing the histogram plot.
+        Matplotlib axes.
+
+    Example:
+        >>> # Plot first trial with stimulus highlighted
+        >>> plot_trajectory(results, 0, highlight_range=(50, 80))
     """
-    differences = data["heading_difference"]
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
 
-    if convert_to_degrees:
-        differences = np.rad2deg(differences)
-        value_range = [-180, 180]
+    # Dimension mapping
+    dim_map = {"x": 0, "y": 1, "z": 2}
+    d1, d2 = dim_map[dims[0]], dim_map[dims[1]]
 
-    ax = plot_histogram(differences, ax=ax, bins=bins, range=value_range, **kwargs)
+    # Extract position
+    pos = results.traces["position"][index]
+    coord1 = pos[:, d1]
+    coord2 = pos[:, d2]
 
-    # Check if the axes is using polar projection
-    if hasattr(ax, "projection") and getattr(ax.projection, "name", None) == "polar":
-        ax.set_theta_zero_location("N")
-        ax.set_xticks(np.deg2rad([0, 90, 180, 270]))
-        ax.set_xticklabels(["0", "+90", "±180", "-90"])
-        ax.set_yticklabels([])
-        ax.set_ylabel("")
-    else:
-        value = "degrees" if convert_to_degrees else "radians"
-        ax.set_xlabel(f"Heading Difference ({value})")
-        ax.set_ylabel("Count")
+    # Normalize if requested
+    if normalize:
+        coord1 = 2 * (coord1 - coord1.min()) / (coord1.max() - coord1.min() + 1e-10) - 1
+        coord2 = 2 * (coord2 - coord2.min()) / (coord2.max() - coord2.min() + 1e-10) - 1
+
+    # Plot main trajectory
+    line = ax.plot(coord1, coord2, "k-", linewidth=kwargs.get("linewidth", 1))[0]
+
+    # Highlight range if specified
+    if highlight_range is not None:
+        start, end = highlight_range
+        ax.plot(
+            coord1[start:end],
+            coord2[start:end],
+            color=highlight_color,
+            linewidth=kwargs.get("linewidth", 1) * 1.5,
+        )
+
+    # Add arrows
+    if show_arrows:
+        for i in range(0, len(coord1) - 1, arrow_spacing):
+            color = highlight_color if highlight_range and highlight_range[0] <= i < highlight_range[1] else "k"
+            if i + 1 < len(coord1):
+                ax.annotate(
+                    "",
+                    xy=(coord1[i + 1], coord2[i + 1]),
+                    xytext=(coord1[i], coord2[i]),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=0.5),
+                )
+
+    ax.set_xlabel(dims[0])
+    ax.set_ylabel(dims[1])
+    ax.set_aspect("equal")
+    ax.axis("off")
 
     return ax
 
 
-def add_shaded_region(
+# =============================================================================
+# Summary and Statistics Plots
+# =============================================================================
+
+
+def plot_response_rate_by_group(
+    results: EventResults,
+    group_by: str,
+    ax: Optional[plt.Axes] = None,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plot response rate as a function of a metadata variable.
+
+    Args:
+        results: EventResults object.
+        group_by: Metadata column to group by (e.g., 'intensity').
+        ax: Matplotlib axes.
+        **kwargs: Additional arguments for bar plot.
+
+    Returns:
+        Matplotlib axes.
+
+    Example:
+        >>> plot_response_rate_by_group(results, group_by='intensity')
+    """
+    if ax is None:
+        _, ax = plt.subplots()
+
+    if group_by not in results.metadata.columns:
+        raise ValueError(f"Column '{group_by}' not in metadata. Available: {list(results.metadata.columns)}")
+
+    # Compute response rates
+    import pandas as pd
+
+    combined = pd.concat([results.metrics, results.metadata], axis=1)
+    stats = combined.groupby(group_by)["responded"].agg(["mean", "sum", "count"])
+    stats.columns = ["rate", "n_responses", "n_total"]
+
+    # Plot
+    ax.bar(range(len(stats)), stats["rate"], **kwargs)
+    ax.set_xticks(range(len(stats)))
+    ax.set_xticklabels([str(x) for x in stats.index])
+    ax.set_xlabel(group_by.replace("_", " ").title())
+    ax.set_ylabel("Response Rate")
+    ax.set_ylim(0, 1)
+
+    # Add count annotations
+    for i, (rate, n) in enumerate(zip(stats["rate"], stats["n_total"])):
+        ax.annotate(
+            f"n={int(n)}",
+            xy=(i, rate + 0.02),
+            ha="center",
+            fontsize=8,
+        )
+
+    return ax
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def add_stimulus_region(
     ax: plt.Axes,
     start: int,
     end: int,
@@ -282,239 +507,94 @@ def add_shaded_region(
     alpha: float = 0.3,
     **kwargs,
 ) -> plt.Axes:
-    """Add a vertical shaded region to an existing plot.
-
-    Useful for highlighting specific regions of interest, such as stimulus periods
-    or events.
+    """
+    Add a vertical shaded region to highlight stimulus period.
 
     Args:
-        ax: Matplotlib axes to add shading to
-        start: Starting x-coordinate of shaded region
-        end: Ending x-coordinate of shaded region
-        color: Color of shaded region (default: "gray")
-        alpha: Transparency of shaded region, 0 to 1 (default: 0.3)
+        ax: Matplotlib axes.
+        start: Start frame.
+        end: End frame.
+        color: Fill color.
+        alpha: Transparency.
 
     Returns:
-        plt.Axes: The axes object with added shaded region
-
-    Example:
-        >>> fig, ax = plt.subplots()
-        >>> ax.plot(data)
-        >>> add_shaded_region(ax, start=50, end=100, color='red', alpha=0.2)
+        Matplotlib axes.
     """
-    # Add vertical span to highlight region
-    ax.axvspan(
-        start,  # x start
-        end,  # x end
-        color=color,
-        alpha=alpha,
-        linewidth=0,
-        **kwargs,
-    )
-
+    ax.axvspan(start, end, color=color, alpha=alpha, linewidth=0, **kwargs)
     return ax
 
 
-def create_statistical_plot(
-    data: np.ndarray,
-    highlight_regions: Optional["list[Tuple[int, int]]"] = None,
-    **kwargs,
-) -> Tuple[plt.Figure, plt.Axes]:
-    """Create a complete statistical plot with mean, std, and optional highlighted regions.
-
-    A convenience function that combines plot_mean_and_std with add_shaded_region.
+def convert_frames_to_ms(
+    ax: plt.Axes,
+    fps: float = 100.0,
+    tick_step_ms: int = 100,
+) -> plt.Axes:
+    """
+    Convert x-axis from frames to milliseconds.
 
     Args:
-        data: Input array of shape (n_samples, n_timepoints)
-        highlight_regions: List of (start, end) tuples defining regions to shade
-        **kwargs: Additional keyword arguments passed to plot_mean_and_std
+        ax: Matplotlib axes.
+        fps: Frame rate.
+        tick_step_ms: Interval between tick marks in milliseconds.
 
     Returns:
-        Tuple containing:
-            - plt.Figure: The figure object
-            - plt.Axes: The axes object containing the plot
-
-    Example:
-        >>> data = np.random.randn(100, 200)  # 100 samples, 200 timepoints
-        >>> regions = [(50, 75), (150, 175)]  # Two regions to highlight
-        >>> fig, ax = create_statistical_plot(
-        ...     data,
-        ...     highlight_regions=regions,
-        ...     color='blue',
-        ...     label='Group A'
-        ... )
+        Matplotlib axes with updated ticks.
     """
-    # Create figure and axes
-    fig, ax = plt.subplots()
-
-    # Plot mean and standard deviation
-    ax = plot_mean_and_std(data, ax=ax, **kwargs)
-
-    # Add highlighted regions if specified
-    if highlight_regions is not None:
-        for start, end in highlight_regions:
-            ax = add_shaded_region(ax, start, end)
-
-    return fig, ax
-
-
-def convert_frames_to_ms(ax: plt.Axes, fps: int = 100, step: int = 300) -> plt.Axes:
-    """Convert x-axis ticks from frames to milliseconds.
-
-    Args:
-        ax: Matplotlib axes to convert x-axis ticks
-        fps: Frames per second of the video. Default is 100.
-        step: Time step in milliseconds between ticks. Default is 300
-
-    Returns:
-        plt.Axes: The axes object with updated x-axis ticks
-
-    Example:
-        >>> fig, ax = plt.subplots()
-        >>> ax.plot(data)  # data in frames (0-150)
-        >>> ax = convert_frames_to_ms(ax, fps=100, step=500)  # Will show ticks at 0, 500, 1000, 1500 ms
-    """
-    # Get current x-axis limits in frames
     x_min, x_max = ax.get_xlim()
-
-    # Convert frame limits to milliseconds
     ms_min = (x_min / fps) * 1000
     ms_max = (x_max / fps) * 1000
 
-    # Create tick positions in milliseconds with the specified step
-    tick_positions_ms = np.arange(int(ms_min), int(ms_max) + step, step)
+    tick_ms = np.arange(int(ms_min), int(ms_max) + tick_step_ms, tick_step_ms)
+    tick_frames = (tick_ms / 1000) * fps
 
-    # Convert millisecond positions back to frames for the axis
-    tick_positions_frames = (tick_positions_ms / 1000) * fps
-
-    # Set new ticks and labels
-    ax.set_xticks(tick_positions_frames)
-    ax.set_xticklabels([f"{int(ms)}" for ms in tick_positions_ms])
-
-    # Set x-axis label
+    ax.set_xticks(tick_frames)
+    ax.set_xticklabels([str(int(ms)) for ms in tick_ms])
     ax.set_xlabel("Time (ms)")
 
     return ax
 
 
-def plot_trajectory_with_arrows(
-    data: dict,
-    index: int,
-    dim1: str = "x",
-    dim2: str = "y",
-    opto_range: list = None,
-    ax: Optional[plt.Axes] = None,
-    normalize: bool = True,
-    **kwargs,
-) -> plt.Axes:
+def create_summary_figure(
+    results: EventResults,
+    title: str = None,
+    figsize: Tuple[float, float] = (12, 4),
+) -> Tuple[plt.Figure, List[plt.Axes]]:
     """
-    Plot the trajectory with arrows for any 2D combination of dimensions.
+    Create a three-panel summary figure for event responses.
+
+    Panels:
+        1. Angular velocity traces
+        2. Linear velocity traces
+        3. Heading change distribution
 
     Args:
-        data (dict): The data containing the trajectory information.
-        index (int): The index of the trajectory to plot.
-        dim1 (str): First dimension to plot (e.g., 'x', 'y', 'z'). Defaults to 'x'.
-        dim2 (str): Second dimension to plot (e.g., 'x', 'y', 'z'). Defaults to 'y'.
-        opto_range (list, optional): The range of indices to highlight with a different color. Defaults to None.
-        ax (Optional[plt.Axes], optional): The axes to plot on. If None, a new figure will be created. Defaults to None.
-        **kwargs: Additional keyword arguments.
+        results: EventResults object.
+        title: Optional figure title.
+        figsize: Figure size.
 
     Returns:
-        plt.Axes: The axes object containing the plot.
+        Tuple of (figure, list of axes).
+
+    Example:
+        >>> fig, axes = create_summary_figure(opto_results, title="Optogenetic Response")
+        >>> plt.savefig("summary.png")
     """
-    # Create dimension mapping
-    dim_mapping = {"x": 0, "y": 1, "z": 2}
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
 
-    # Validate dimensions
-    if dim1 not in dim_mapping or dim2 not in dim_mapping:
-        raise ValueError("Dimensions must be 'x', 'y', or 'z'")
-    if dim1 == dim2:
-        raise ValueError("Dimensions must be different")
+    # Angular velocity
+    plot_angular_velocity(results, ax=axes[0], use_abs=True, baseline_range=(0, 50))
+    axes[0].set_title("Angular Velocity")
 
-    # Extract coordinates for the specified dimensions
-    coord1 = data["position"][index][:, dim_mapping[dim1]]
-    coord2 = data["position"][index][:, dim_mapping[dim2]]
+    # Linear velocity
+    plot_linear_velocity(results, ax=axes[1])
+    axes[1].set_title("Linear Velocity")
 
-    # normalzie to -1 to 1
-    if normalize:
-        coord1 = ((coord1 - coord1.min()) / (coord1.max() - coord1.min())) * 2 - 1
-        coord2 = ((coord2 - coord2.min()) / (coord2.max() - coord2.min())) * 2 - 1
+    # Heading distribution
+    plot_heading_distribution(results, ax=axes[2], polar=False)
+    axes[2].set_title("Heading Change")
 
-    # Create new figure if no axes provided
-    if ax is None:
-        _, ax = plt.subplots()
+    if title:
+        fig.suptitle(title)
 
-    # Plot the main trajectory
-    line = ax.plot(coord1, coord2, color="k")[0]
-
-    # Plot highlighted range if specified
-    if opto_range:
-        ax.plot(
-            coord1[opto_range[0] : opto_range[1]],
-            coord2[opto_range[0] : opto_range[1]],
-            color="tab:red",
-            linewidth=kwargs.get("linewidth", 1),
-        )
-    ax.axis("off")
-
-    # Add arrows
-    step = kwargs.get("step", 5)
-    for i in range(0, len(coord1), step):
-        if opto_range:
-            color = "tab:red" if i in range(opto_range[0], opto_range[1]) else "k"
-        else:
-            color = "k"
-
-        _add_arrow(
-            line,
-            position=coord1[i],
-            direction="right",
-            size=kwargs.get("arrow_size", 5),
-            color=color,
-        )
-
-    # Optional: Add labels
-    if kwargs.get("show_labels", False):
-        ax.set_xlabel(dim1)
-        ax.set_ylabel(dim2)
-
-    return ax
-
-
-def _add_arrow(line, position=None, direction="right", size=15, color=None):
-    """
-    Add an arrow to a line plot.
-
-    Parameters:
-    line (matplotlib.lines.Line2D): The line to add the arrow to.
-    position (float, optional): The x-coordinate of the arrow's starting position. If not provided, it will be set to the mean of the line's x-data.
-    direction (str, optional): The direction of the arrow. Can be 'right' or 'left'. Defaults to 'right'.
-    size (int, optional): The size of the arrow. Defaults to 15.
-    color (str, optional): The color of the arrow. If not provided, it will be set to the color of the line.
-
-    Returns:
-    None
-    """
-    if color is None:
-        color = line.get_color()
-
-    xdata = line.get_xdata()
-    ydata = line.get_ydata()
-
-    if position is None:
-        position = xdata.mean()
-
-    # find closest index
-    start_ind = np.argmin(np.absolute(xdata - position))
-    if direction == "right":
-        end_ind = start_ind + 1
-    else:
-        end_ind = start_ind - 1
-
-    line.axes.annotate(
-        "",
-        xytext=(xdata[start_ind], ydata[start_ind]),
-        xy=(xdata[end_ind], ydata[end_ind]),
-        arrowprops=dict(arrowstyle="-|>", color=color),
-        size=size,
-    )
+    fig.tight_layout()
+    return fig, axes
