@@ -228,7 +228,7 @@ def detect_saccades(
     angular_velocity: np.ndarray,
     threshold: float = 300.0,
     min_spacing: int = 50,
-    mode: str = "both",
+    mode: str = "absolute",
     return_properties: bool = False,
 ) -> np.ndarray:
     """

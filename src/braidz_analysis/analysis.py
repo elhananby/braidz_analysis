@@ -130,15 +130,22 @@ class EventResults:
 
         metrics: DataFrame with one row per event:
             - responded: Whether a saccade occurred in response window
-            - heading_change: Heading change of response (radians, NaN if no response)
-            - reaction_time: Frames from event to response peak
-            - peak_velocity: Peak angular velocity of response
+            - heading_change: Heading change at response peak (or reference point if no response)
+            - reaction_time: Frames from event to response peak (NaN if no response)
+            - peak_velocity: Angular velocity at response peak (or reference point)
+            - max_velocity_in_window: Maximum |angular velocity| in response window
 
         metadata: DataFrame with event metadata (from opto/stim file):
             - May include: intensity, duration, frequency, sham, etc.
             - Columns depend on what's in the source event file
 
         config: Configuration used for analysis.
+
+    Note:
+        For non-responsive trials, metrics are computed at a reference point:
+        - If 'duration' is in metadata (opto): center of stimulus duration
+        - Otherwise: center of response window
+        This allows comparison between responsive and non-responsive trials.
     """
 
     traces: Dict[str, np.ndarray]
@@ -587,18 +594,39 @@ def analyze_event_responses(
         response_peaks = peaks[(peaks > event_idx) & (peaks < response_window_end)]
 
         if len(response_peaks) > 0:
+            # Responsive trial: use the detected saccade peak
             response_peak = response_peaks[0]
             responded = True
             reaction_time = response_peak - event_idx
-            heading_change = compute_heading_change(
-                heading, response_peak, window=config.heading_window
-            )
-            peak_velocity = angular_velocity[response_peak]
+            reference_idx = response_peak
         else:
+            # Non-responsive trial: use a reference point for metric calculation
             responded = False
             reaction_time = np.nan
-            heading_change = np.nan
-            peak_velocity = np.nan
+
+            # Determine reference index based on available metadata
+            # For opto: use center of stimulus duration
+            # For stim: use end of response window (or could be customized)
+            if "duration" in event_row.index and pd.notna(event_row["duration"]):
+                # Duration is typically in ms, convert to frames
+                duration_frames = int(event_row["duration"] / 1000 * config.fps)
+                reference_idx = event_idx + duration_frames // 2
+            else:
+                # Fallback: use center of response window
+                reference_idx = event_idx + config.response_window // 2
+
+            # Ensure reference_idx is within bounds
+            reference_idx = min(reference_idx, len(angular_velocity) - config.heading_window - 1)
+
+        # Calculate metrics at the reference point
+        heading_change = compute_heading_change(
+            heading, reference_idx, window=config.heading_window
+        )
+        peak_velocity = angular_velocity[reference_idx]
+
+        # Also compute max angular velocity in response window (useful for non-responsive)
+        window_slice = angular_velocity[event_idx:response_window_end]
+        max_velocity_in_window = np.max(np.abs(window_slice)) if len(window_slice) > 0 else np.nan
 
         # Extract traces around event
         start = event_idx - config.pre_frames
@@ -615,6 +643,7 @@ def analyze_event_responses(
                 "heading_change": heading_change,
                 "reaction_time": reaction_time,
                 "peak_velocity": peak_velocity,
+                "max_velocity_in_window": max_velocity_in_window,
                 "obj_id": obj_id,
                 "exp_num": exp_num,
                 "frame": frame,
