@@ -1,3 +1,21 @@
+"""
+DEPRECATED: This module is deprecated. Use braidz_analysis.io instead.
+
+Migration:
+    Old: from braidz_analysis import braidz; braidz.read_braidz(...)
+    New: import braidz_analysis as ba; ba.read_braidz(...)
+
+This module will be removed in version 1.0.
+"""
+import warnings
+
+warnings.warn(
+    "braidz_analysis.braidz is deprecated. Use braidz_analysis.io instead. "
+    "See README.md for migration guide.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import io
 import logging
 import os

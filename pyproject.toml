@@ -1,7 +1,7 @@
 [project]
 name = "braidz-analysis"
-version = "0.2"
-description = "Add your description here"
+version = "0.3.0"
+description = "Analysis tools for fruit fly flight trajectories from the Strand-Braid tracking system"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,15 +9,20 @@ dependencies = [
     "ipykernel>=6.29.5",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.0",
+    "mosek>=11.1.2",
     "natsort>=8.4.0",
     "numpy>=2.2.0",
     "pandas>=2.2.3",
+    "polars>=1.36.1",
     "pyarrow>=18.1.0",
     "pycircstat2>=0.1.8",
     "pynumdiff>=0.1.2",
+    "scikit-learn>=1.7.2",
     "scipy>=1.14.1",
     "seaborn>=0.13.2",
+    "statsmodels>=0.14.6",
     "tqdm>=4.67.1",
+    "umap-learn>=0.5.11",
 ]
 
 [build-system]

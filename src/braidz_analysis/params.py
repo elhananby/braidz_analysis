@@ -1,3 +1,22 @@
+"""
+DEPRECATED: This module is deprecated. Use braidz_analysis.config instead.
+
+Migration:
+    Old: ba.params.OptoAnalysisParams(duration=30, radius=0.025)
+    New: ba.Config(response_window=30)
+
+The new Config class unifies all parameter classes into one.
+This module will be removed in version 1.0.
+"""
+import warnings
+
+warnings.warn(
+    "braidz_analysis.params is deprecated. Use braidz_analysis.config instead. "
+    "See README.md for migration guide.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from dataclasses import dataclass, field
 import numpy as np
 

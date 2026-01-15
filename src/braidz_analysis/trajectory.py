@@ -1,3 +1,24 @@
+"""
+DEPRECATED: This module is deprecated. Use braidz_analysis.kinematics instead.
+
+Migration:
+    Old: ba.trajectory.calculate_angular_velocity(xvel, yvel)
+    New: ba.compute_angular_velocity(xvel, yvel)
+
+    Old: ba.trajectory.detect_saccades(omega)
+    New: ba.detect_saccades(omega)
+
+This module will be removed in version 1.0.
+"""
+import warnings
+
+warnings.warn(
+    "braidz_analysis.trajectory is deprecated. Use braidz_analysis.kinematics instead. "
+    "See README.md for migration guide.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import numpy as np
 from pynumdiff.smooth_finite_difference import butterdiff
 from scipy.signal import find_peaks, savgol_filter

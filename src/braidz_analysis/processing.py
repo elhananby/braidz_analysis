@@ -1,3 +1,24 @@
+"""
+DEPRECATED: This module is deprecated. Use braidz_analysis.analysis instead.
+
+Migration:
+    Old: ba.processing.get_stim_or_opto_data(df, opto, type='opto')
+    New: ba.analyze_event_responses(df, opto)
+
+    Old: ba.processing.get_all_saccades(df)
+    New: ba.analyze_saccades(df)
+
+This module will be removed in version 1.0.
+"""
+import warnings
+
+warnings.warn(
+    "braidz_analysis.processing is deprecated. Use braidz_analysis.analysis instead. "
+    "See README.md for migration guide.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import logging
 from typing import List, Literal, Optional, Union
 
