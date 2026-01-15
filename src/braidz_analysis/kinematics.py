@@ -228,18 +228,26 @@ def detect_saccades(
     angular_velocity: np.ndarray,
     threshold: float = 300.0,
     min_spacing: int = 50,
+    mode: str = "both",
     return_properties: bool = False,
 ) -> np.ndarray:
     """
     Detect saccades as peaks in angular velocity.
 
-    Uses scipy's find_peaks to detect both positive and negative peaks
-    (left and right turns) in angular velocity.
+    Uses scipy's find_peaks to detect peaks in angular velocity. The mode
+    parameter controls which direction of turns to detect.
 
     Args:
         angular_velocity: Angular velocity in rad/s.
         threshold: Minimum angular velocity for detection (deg/s).
         min_spacing: Minimum frames between peaks.
+        mode: Which peaks to detect:
+            - "both": Detect positive and negative peaks separately, then combine.
+                      This is direction-aware and preserves turn direction info.
+            - "absolute": Run peak detection on |angular_velocity|.
+                          Simpler but loses direction information in peak detection.
+            - "positive": Only detect positive peaks (left/counterclockwise turns).
+            - "negative": Only detect negative peaks (right/clockwise turns).
         return_properties: If True, also return peak properties dict.
 
     Returns:
@@ -247,28 +255,66 @@ def detect_saccades(
         If return_properties=True, also returns dict with peak properties.
 
     Example:
-        >>> peaks = detect_saccades(omega, threshold=300, min_spacing=50)
-        >>> print(f"Found {len(peaks)} saccades")
+        >>> # Detect all saccades (default)
+        >>> peaks = detect_saccades(omega, threshold=300)
+        >>>
+        >>> # Detect only left turns
+        >>> left_peaks = detect_saccades(omega, threshold=300, mode="positive")
+        >>>
+        >>> # Detect on absolute value trace
+        >>> peaks = detect_saccades(omega, threshold=300, mode="absolute")
     """
+    valid_modes = {"both", "absolute", "positive", "negative"}
+    if mode not in valid_modes:
+        raise ValueError(f"mode must be one of {valid_modes}, got '{mode}'")
+
     threshold_rad = np.deg2rad(threshold)
 
-    # Find positive peaks (counterclockwise turns)
-    pos_peaks, pos_props = find_peaks(
-        angular_velocity, height=threshold_rad, distance=min_spacing
-    )
+    if mode == "absolute":
+        # Run peak detection on absolute value of angular velocity
+        peaks, props = find_peaks(
+            np.abs(angular_velocity), height=threshold_rad, distance=min_spacing
+        )
+        if return_properties:
+            return peaks, {"peaks": peaks, "heights": props.get("peak_heights", [])}
+        return peaks
 
-    # Find negative peaks (clockwise turns)
-    neg_peaks, neg_props = find_peaks(
-        -angular_velocity, height=threshold_rad, distance=min_spacing
-    )
+    elif mode == "positive":
+        # Only detect positive peaks (counterclockwise/left turns)
+        peaks, props = find_peaks(
+            angular_velocity, height=threshold_rad, distance=min_spacing
+        )
+        if return_properties:
+            return peaks, {"pos_peaks": peaks, "heights": props.get("peak_heights", [])}
+        return peaks
 
-    # Combine and sort
-    all_peaks = np.sort(np.concatenate([pos_peaks, neg_peaks]))
+    elif mode == "negative":
+        # Only detect negative peaks (clockwise/right turns)
+        peaks, props = find_peaks(
+            -angular_velocity, height=threshold_rad, distance=min_spacing
+        )
+        if return_properties:
+            return peaks, {"neg_peaks": peaks, "heights": props.get("peak_heights", [])}
+        return peaks
 
-    if return_properties:
-        return all_peaks, {"pos_peaks": pos_peaks, "neg_peaks": neg_peaks}
+    else:  # mode == "both"
+        # Find positive peaks (counterclockwise turns)
+        pos_peaks, pos_props = find_peaks(
+            angular_velocity, height=threshold_rad, distance=min_spacing
+        )
 
-    return all_peaks
+        # Find negative peaks (clockwise turns)
+        neg_peaks, neg_props = find_peaks(
+            -angular_velocity, height=threshold_rad, distance=min_spacing
+        )
+
+        # Combine and sort
+        all_peaks = np.sort(np.concatenate([pos_peaks, neg_peaks]))
+
+        if return_properties:
+            return all_peaks, {"pos_peaks": pos_peaks, "neg_peaks": neg_peaks}
+
+        return all_peaks
 
 
 def extract_saccade_events(
