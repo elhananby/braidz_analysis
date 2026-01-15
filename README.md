@@ -267,25 +267,17 @@ ba.Config(
 
 ## Migration from v0.2
 
-The v0.3 API is simplified but maintains backwards compatibility:
+The v0.3 API has been completely rewritten with a simplified architecture.
+The old modules (`braidz`, `processing`, `trajectory`, `params`) have been removed.
 
-```python
-# Old API (still works)
-import braidz_analysis as ba
-data = ba.braidz.read_braidz("file.braidz")
-results = ba.processing.get_stim_or_opto_data(data['df'], data['opto'], type='opto')
-
-# New API (recommended)
-data = ba.read_braidz("file.braidz")
-results = ba.analyze_event_responses(data.trajectories, data.opto)
-```
-
-Key changes:
-- `read_braidz()` now returns `BraidzData` object instead of dict
-- `get_stim_or_opto_data()` → `analyze_event_responses()`
-- `get_all_saccades()` → `analyze_saccades()`
-- 4 param classes → 1 unified `Config` class
-- Dict results → `SaccadeResults` / `EventResults` with filtering methods
+| Old (v0.2) | New (v0.3) |
+|------------|------------|
+| `ba.braidz.read_braidz(file)` | `ba.read_braidz(file)` |
+| `ba.processing.get_stim_or_opto_data(df, opto, type='opto')` | `ba.analyze_event_responses(df, opto)` |
+| `ba.processing.get_all_saccades(df)` | `ba.analyze_saccades(df)` |
+| `ba.params.OptoAnalysisParams(...)` | `ba.Config(...)` |
+| `data['df']`, `data['opto']` | `data.trajectories`, `data.opto` |
+| Dict results | `SaccadeResults` / `EventResults` with `.filter()` methods |
 
 ## License
 
