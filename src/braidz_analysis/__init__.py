@@ -89,7 +89,7 @@ from .kinematics import (
 )
 
 # =============================================================================
-# Legacy module access for backwards compatibility
+# Module access
 # =============================================================================
 
 from . import io
@@ -97,11 +97,6 @@ from . import kinematics
 from . import analysis
 from . import plotting
 from . import config
-
-# Legacy aliases (deprecated, will be removed in v1.0)
-braidz = io  # Old: ba.braidz.read_braidz -> New: ba.read_braidz
-processing = analysis  # Old: ba.processing.get_stim_or_opto_data -> New: ba.analyze_event_responses
-trajectory = kinematics  # Old: ba.trajectory.detect_saccades -> New: ba.detect_saccades
 
 # =============================================================================
 # Public API declaration
