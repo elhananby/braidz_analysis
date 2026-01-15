@@ -22,17 +22,16 @@ dependencies = [
     "numpy>=2.0.0",
     "pandas>=2.0.0",
     "scipy>=1.10.0",
-
     # Visualization
     "matplotlib>=3.7.0",
     "seaborn>=0.12.0",
-
     # Utilities
     "tqdm>=4.60.0",
     "pynumdiff>=0.1.2",
-
     # Optional but recommended for faster CSV parsing
     "pyarrow>=12.0.0",
+    "ipykernel>=6.29.5",
+    "jupyter>=1.1.1",
 ]
 
 [project.optional-dependencies]

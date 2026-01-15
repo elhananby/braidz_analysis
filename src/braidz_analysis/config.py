@@ -123,4 +123,5 @@ OPTO_CONFIG = Config(
 STIM_CONFIG = Config(
     response_window=50,
     post_frames=150,
+    min_trajectory_frames=250,  # Accommodate larger extraction window
 )
