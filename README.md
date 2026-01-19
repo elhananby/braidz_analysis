@@ -21,7 +21,7 @@ uv sync
 ### Using conda/mamba
 
 ```bash
-mamba env create -f env.yaml
+mamba env create -f environment.yaml
 mamba activate braidz-analysis
 ```
 
@@ -124,7 +124,8 @@ Both analysis functions return structured result objects with:
 
 - **metrics**: DataFrame with computed metrics per event
   - For saccades: `heading_change`, `peak_velocity`, `amplitude`, `direction`
-  - For events: `responded`, `heading_change`, `reaction_time`, `peak_velocity`
+  - For events: `responded`, `heading_change`, `reaction_time`, `peak_velocity`, `max_velocity_in_window`
+  - Note: Metrics are computed for all trials (not just responsive ones)
 
 - **filter()**: Method to subset results by any column
 
@@ -201,8 +202,8 @@ For lower-level access to kinematic calculations:
 heading, omega = ba.compute_angular_velocity(df['xvel'], df['yvel'])
 speed = ba.compute_linear_velocity(df['xvel'], df['yvel'], df['zvel'])
 
-# Detect saccades
-peaks = ba.detect_saccades(omega, threshold=300, min_spacing=50)
+# Detect saccades (mode: 'both', 'absolute', 'positive', 'negative')
+peaks = ba.detect_saccades(omega, threshold=300, min_spacing=50, mode='absolute')
 
 # Classify flight state
 is_flying = ba.classify_flight_state(speed)
@@ -221,6 +222,7 @@ See the `notebooks/` directory for complete examples:
 - `01_basic_usage.ipynb` - Loading data and basic analysis
 - `02_opto_analysis.ipynb` - Optogenetic response analysis
 - `03_saccade_analysis.ipynb` - Detailed saccade characterization
+- `04_visual_stim_analysis.ipynb` - Visual stimuli (looming) analysis
 
 ## API Reference
 
@@ -251,7 +253,8 @@ ba.Config(
     fps=100.0,              # Frame rate (Hz)
     pre_frames=50,          # Frames before event
     post_frames=100,        # Frames after event
-    response_window=30,     # Frames to detect response
+    response_delay=0,       # Frames to wait before looking for response
+    response_window=30,     # Frames after event to stop looking
 
     # Saccade detection
     saccade_threshold=300,  # deg/s
@@ -262,6 +265,14 @@ ba.Config(
     min_trajectory_frames=150,
     z_bounds=(0.05, 0.3),
     max_radius=0.23,
+)
+
+# Example: For looming stimuli with 300ms expansion time
+looming_config = ba.Config(
+    response_delay=30,      # Ignore first 300ms (stimulus expanding)
+    response_window=60,     # Look up to 600ms after onset
+    post_frames=150,
+    min_trajectory_frames=250,
 )
 ```
 
