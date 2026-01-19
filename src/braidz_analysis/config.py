@@ -22,7 +22,10 @@ class Config:
         fps: Frame rate of the tracking system in Hz.
         pre_frames: Number of frames to extract before an event/saccade.
         post_frames: Number of frames to extract after an event/saccade.
-        response_window: Frames after event onset to search for a response saccade.
+        response_delay: Frames after event to wait before looking for response.
+            Use this to ignore early saccades (e.g., during stimulus buildup).
+        response_window: Frames after event onset to stop searching for response.
+            The actual search window is [response_delay, response_window].
 
         saccade_threshold: Angular velocity threshold for saccade detection (deg/s).
         min_saccade_spacing: Minimum frames between detected saccades.
@@ -48,7 +51,8 @@ class Config:
     fps: float = 100.0
     pre_frames: int = 50
     post_frames: int = 100
-    response_window: int = 30  # frames after event to detect response
+    response_delay: int = 0  # frames after event before looking for response
+    response_window: int = 30  # frames after event to stop looking for response
 
     # === Saccade Detection ===
     saccade_threshold: float = 300.0  # deg/s
@@ -77,6 +81,12 @@ class Config:
                 f"Extraction window ({self.pre_frames} + {self.post_frames} = "
                 f"{self.pre_frames + self.post_frames} frames) cannot exceed "
                 f"min_trajectory_frames ({self.min_trajectory_frames})"
+            )
+
+        if self.response_delay >= self.response_window:
+            raise ValueError(
+                f"response_delay ({self.response_delay}) must be less than "
+                f"response_window ({self.response_window})"
             )
 
         if self.smoothing_window % 2 == 0:

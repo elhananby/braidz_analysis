@@ -590,8 +590,10 @@ def analyze_event_responses(
         )
 
         # Find response saccade (first saccade in response window)
+        # Window is [event + response_delay, event + response_window]
+        response_window_start = event_idx + config.response_delay
         response_window_end = event_idx + config.response_window
-        response_peaks = peaks[(peaks > event_idx) & (peaks < response_window_end)]
+        response_peaks = peaks[(peaks >= response_window_start) & (peaks < response_window_end)]
 
         if len(response_peaks) > 0:
             # Responsive trial: use the detected saccade peak
@@ -625,7 +627,7 @@ def analyze_event_responses(
         peak_velocity = angular_velocity[reference_idx]
 
         # Also compute max angular velocity in response window (useful for non-responsive)
-        window_slice = angular_velocity[event_idx:response_window_end]
+        window_slice = angular_velocity[response_window_start:response_window_end]
         max_velocity_in_window = np.max(np.abs(window_slice)) if len(window_slice) > 0 else np.nan
 
         # Extract traces around event
