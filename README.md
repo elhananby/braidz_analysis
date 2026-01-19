@@ -260,6 +260,7 @@ ba.Config(
     saccade_threshold=300,  # deg/s
     min_saccade_spacing=50, # frames
     heading_window=10,      # frames for heading calculation
+    detect_in_window_only=False,  # More sensitive response detection
 
     # Quality filters
     min_trajectory_frames=150,
@@ -273,6 +274,7 @@ looming_config = ba.Config(
     response_window=60,     # Look up to 600ms after onset
     post_frames=150,
     min_trajectory_frames=250,
+    detect_in_window_only=True,  # More sensitive - ignores saccades before stimulus
 )
 ```
 

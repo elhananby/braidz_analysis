@@ -30,6 +30,10 @@ class Config:
         saccade_threshold: Angular velocity threshold for saccade detection (deg/s).
         min_saccade_spacing: Minimum frames between detected saccades.
         heading_window: Frames before/after peak for heading change calculation.
+        detect_in_window_only: If True, run saccade detection only within the
+            response window rather than the entire trajectory. This makes detection
+            more sensitive to responses that might otherwise be suppressed by
+            min_saccade_spacing due to earlier saccades outside the window.
 
         min_trajectory_frames: Minimum trajectory length to include in analysis.
         z_bounds: Valid vertical position range (min, max) in meters.
@@ -58,6 +62,7 @@ class Config:
     saccade_threshold: float = 300.0  # deg/s
     min_saccade_spacing: int = 50  # frames
     heading_window: int = 10  # frames for heading change calculation
+    detect_in_window_only: bool = False  # Run detection only within response window
 
     # === Trajectory Quality Filters ===
     min_trajectory_frames: int = 150

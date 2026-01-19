@@ -582,18 +582,30 @@ def analyze_event_responses(
         z = savgol_filter(grp["z"].values, config.smoothing_window, config.smoothing_polyorder)
         position = np.column_stack([x, y, z])
 
-        # Detect saccades
-        peaks = detect_saccades(
-            angular_velocity,
-            threshold=config.saccade_threshold,
-            min_spacing=config.min_saccade_spacing,
-        )
-
         # Find response saccade (first saccade in response window)
         # Window is [event + response_delay, event + response_window]
         response_window_start = event_idx + config.response_delay
         response_window_end = event_idx + config.response_window
-        response_peaks = peaks[(peaks >= response_window_start) & (peaks < response_window_end)]
+
+        if config.detect_in_window_only:
+            # Run saccade detection only within the response window
+            # This is more sensitive to responses that might be suppressed by min_spacing
+            window_slice = angular_velocity[response_window_start:response_window_end]
+            window_peaks = detect_saccades(
+                window_slice,
+                threshold=config.saccade_threshold,
+                min_spacing=config.min_saccade_spacing,
+            )
+            # Adjust indices back to full trajectory coordinates
+            response_peaks = window_peaks + response_window_start
+        else:
+            # Default: detect on full trace, then filter to response window
+            peaks = detect_saccades(
+                angular_velocity,
+                threshold=config.saccade_threshold,
+                min_spacing=config.min_saccade_spacing,
+            )
+            response_peaks = peaks[(peaks >= response_window_start) & (peaks < response_window_end)]
 
         if len(response_peaks) > 0:
             # Responsive trial: use the detected saccade peak
