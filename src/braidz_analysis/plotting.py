@@ -151,7 +151,7 @@ def plot_angular_velocity(
         results: Analysis results object.
         ax: Matplotlib axes.
         use_abs: Use absolute values (default True).
-        baseline_range: Frames for baseline subtraction.
+        baseline_range: Frames for baseline subtraction. Ignored if use_abs=False.
         stimulus_range: Frames to highlight as stimulus period.
         stimulus_color: Color for stimulus highlight.
         convert_to_degrees: Convert to degrees.
@@ -160,12 +160,15 @@ def plot_angular_velocity(
     Returns:
         Matplotlib axes.
     """
+    # Baseline subtraction only makes sense with absolute values
+    effective_baseline = baseline_range if use_abs else None
+
     ax = plot_traces(
         results,
         trace_type="angular_velocity",
         ax=ax,
         use_abs=use_abs,
-        baseline_range=baseline_range,
+        baseline_range=effective_baseline,
         convert_to_degrees=convert_to_degrees,
         **kwargs,
     )
