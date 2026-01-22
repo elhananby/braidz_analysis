@@ -6,8 +6,7 @@ replacing the previous multiple parameter classes (SaccadeAnalysisParams,
 OptoAnalysisParams, StimAnalysisParams, etc.).
 """
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass

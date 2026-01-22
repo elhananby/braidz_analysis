@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-import os
-import zipfile
 import gzip
-import shutil
-from pathlib import Path
-from typing import Union, Optional
 import logging
+import os
+import shutil
 import tempfile
+import zipfile
+from pathlib import Path
+from typing import Optional, Union
 
 
 class BraidzError(Exception):
@@ -137,9 +137,7 @@ def dir_to_braidz(
 
                     # Add the file to the ZIP archive
                     file_size = os.path.getsize(source_file)
-                    print(
-                        f"Adding to archive (size: {file_size / 1024 / 1024:.2f} MB)..."
-                    )
+                    print(f"Adding to archive (size: {file_size / 1024 / 1024:.2f} MB)...")
                     with open(source_file, "rb") as f:
                         zipf.writestr(zinfo, f.read())
                     print("Successfully added to archive")

@@ -21,8 +21,7 @@ from pynumdiff.smooth_finite_difference import butterdiff
 from scipy.signal import find_peaks, savgol_filter
 from scipy.stats import circmean
 
-from .config import Config, DEFAULT_CONFIG
-
+from .config import DEFAULT_CONFIG, Config
 
 # =============================================================================
 # Data Structures
@@ -281,18 +280,14 @@ def detect_saccades(
 
     elif mode == "positive":
         # Only detect positive peaks (counterclockwise/left turns)
-        peaks, props = find_peaks(
-            angular_velocity, height=threshold_rad, distance=min_spacing
-        )
+        peaks, props = find_peaks(angular_velocity, height=threshold_rad, distance=min_spacing)
         if return_properties:
             return peaks, {"pos_peaks": peaks, "heights": props.get("peak_heights", [])}
         return peaks
 
     elif mode == "negative":
         # Only detect negative peaks (clockwise/right turns)
-        peaks, props = find_peaks(
-            -angular_velocity, height=threshold_rad, distance=min_spacing
-        )
+        peaks, props = find_peaks(-angular_velocity, height=threshold_rad, distance=min_spacing)
         if return_properties:
             return peaks, {"neg_peaks": peaks, "heights": props.get("peak_heights", [])}
         return peaks
@@ -341,9 +336,7 @@ def extract_saccade_events(
     events = []
     for peak in peaks:
         # Compute heading change
-        heading_change = compute_heading_change(
-            heading, peak, window=config.heading_window
-        )
+        heading_change = compute_heading_change(heading, peak, window=config.heading_window)
 
         # Estimate saccade duration (frames where |omega| > threshold/2)
         half_thresh = config.saccade_threshold_rad / 2

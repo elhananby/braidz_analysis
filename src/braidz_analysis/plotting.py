@@ -19,7 +19,6 @@ import seaborn as sns
 
 from .analysis import EventResults, SaccadeResults
 
-
 # =============================================================================
 # Utility Functions
 # =============================================================================
@@ -30,9 +29,7 @@ def _get_mean_and_std(arr: np.ndarray, axis: int = 0) -> Tuple[np.ndarray, np.nd
     return np.nanmean(arr, axis=axis), np.nanstd(arr, axis=axis)
 
 
-def _subtract_baseline(
-    arr: np.ndarray, start: int, end: int
-) -> np.ndarray:
+def _subtract_baseline(arr: np.ndarray, start: int, end: int) -> np.ndarray:
     """Subtract baseline (mean of range) from each row."""
     baseline = np.nanmean(arr[:, start:end], axis=1)
     return arr - baseline[:, np.newaxis]
@@ -82,7 +79,9 @@ def plot_traces(
 
     # Get trace data
     if trace_type not in results.traces:
-        raise ValueError(f"Unknown trace type: {trace_type}. Available: {list(results.traces.keys())}")
+        raise ValueError(
+            f"Unknown trace type: {trace_type}. Available: {list(results.traces.keys())}"
+        )
 
     data = results.traces[trace_type].copy()
 
@@ -273,7 +272,9 @@ def plot_heading_distribution(
     # Plot histogram
     if polar:
         # For polar plots, use bar chart
-        hist, bin_edges = np.histogram(heading_changes, bins=bins, range=value_range, density=density)
+        hist, bin_edges = np.histogram(
+            heading_changes, bins=bins, range=value_range, density=density
+        )
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
         width = np.diff(bin_edges)[0]
 
@@ -421,7 +422,11 @@ def plot_trajectory(
     # Add arrows
     if show_arrows:
         for i in range(0, len(coord1) - 1, arrow_spacing):
-            color = highlight_color if highlight_range and highlight_range[0] <= i < highlight_range[1] else "k"
+            color = (
+                highlight_color
+                if highlight_range and highlight_range[0] <= i < highlight_range[1]
+                else "k"
+            )
             if i + 1 < len(coord1):
                 ax.annotate(
                     "",
@@ -468,7 +473,9 @@ def plot_response_rate_by_group(
         _, ax = plt.subplots()
 
     if group_by not in results.metadata.columns:
-        raise ValueError(f"Column '{group_by}' not in metadata. Available: {list(results.metadata.columns)}")
+        raise ValueError(
+            f"Column '{group_by}' not in metadata. Available: {list(results.metadata.columns)}"
+        )
 
     # Compute response rates
     import pandas as pd

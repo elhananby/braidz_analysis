@@ -11,14 +11,14 @@ convenient filtering methods.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Union
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 from tqdm import tqdm
 
-from .config import Config, DEFAULT_CONFIG
+from .config import DEFAULT_CONFIG, Config
 from .kinematics import (
     classify_flight_state,
     compute_angular_velocity,
@@ -358,7 +358,11 @@ def analyze_saccades(
 
     if len(df) == 0:
         return SaccadeResults(
-            traces={"angular_velocity": np.array([]), "linear_velocity": np.array([]), "position": np.array([])},
+            traces={
+                "angular_velocity": np.array([]),
+                "linear_velocity": np.array([]),
+                "position": np.array([]),
+            },
             metrics=pd.DataFrame(),
             config=config,
         )
@@ -430,9 +434,7 @@ def analyze_saccades(
             all_positions.append(position[start:end])
 
             # Compute metrics
-            heading_change = compute_heading_change(
-                heading, peak, window=config.heading_window
-            )
+            heading_change = compute_heading_change(heading, peak, window=config.heading_window)
 
             metrics = {
                 "heading_change": heading_change,
@@ -665,11 +667,7 @@ def analyze_event_responses(
         )
 
         # Store metadata from event row (all columns that aren't identifiers)
-        metadata_cols = [
-            c
-            for c in event_row.index
-            if c not in ["obj_id", "exp_num", "frame"]
-        ]
+        metadata_cols = [c for c in event_row.index if c not in ["obj_id", "exp_num", "frame"]]
         all_metadata.append({c: event_row[c] for c in metadata_cols})
 
     # Convert to arrays

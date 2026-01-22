@@ -1,4 +1,4 @@
-# Conda/Mamba environment for braidz-analysis development
+# Conda/Mamba environment for braidz-analysis
 #
 # Create environment:
 #   mamba env create -f environment.yaml
@@ -38,11 +38,6 @@ dependencies:
   # Optional: for pynumdiff advanced features
   - cvxpy>=1.6.0
 
-  # Development tools
-  - ruff>=0.1.0
-  - pre-commit>=3.0.0
-  - pytest>=7.0.0
-
   # Pip for packages not on conda
   - pip>=24.0
 
@@ -53,5 +48,5 @@ dependencies:
       # Optional: Chebyshev polynomial derivatives
       - git+https://github.com/pychebfun/pychebfun.git
 
-      # Install braidz-analysis itself in editable mode
-      - -e .
+      # Install braidz-analysis from GitHub
+      - git+https://github.com/elhananby/braidz_analysis.git

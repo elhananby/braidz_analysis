@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Union, List, Tuple
-import logging
-from tqdm import tqdm
+from typing import List, Tuple, Union
+
 from braidz_writer import dir_to_braidz
+from tqdm import tqdm
 
 
 class CleanupError(Exception):
@@ -154,9 +155,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Process .braid folders in a directory, converting to .braidz and cleaning up"
     )
-    parser.add_argument(
-        "base_dir", type=str, help="Base directory containing .braid folders"
-    )
+    parser.add_argument("base_dir", type=str, help="Base directory containing .braid folders")
 
     args = parser.parse_args()
 
