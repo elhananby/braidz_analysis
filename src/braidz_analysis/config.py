@@ -57,11 +57,16 @@ class Config:
     response_delay: int = 0  # frames after event before looking for response
     response_window: int = 30  # frames after event to stop looking for response
 
-    # === Saccade Detection ===
+    # === Saccade Detection (velocity-based) ===
     saccade_threshold: float = 300.0  # deg/s
     min_saccade_spacing: int = 50  # frames
     heading_window: int = 10  # frames for heading change calculation
     detect_in_window_only: bool = False  # Run detection only within response window
+
+    # === Saccade Detection (mGSD algorithm) ===
+    mgsd_delta_frames: int = 5  # window size (frames before/after)
+    mgsd_threshold: float = 0.001  # minimum score for peak detection
+    mgsd_min_spacing: int = 10  # minimum frames between peaks
 
     # === Trajectory Quality Filters ===
     min_trajectory_frames: int = 150

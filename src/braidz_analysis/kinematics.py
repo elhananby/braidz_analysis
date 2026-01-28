@@ -8,7 +8,7 @@ trajectories, including:
     - Saccade detection
     - Flight state classification
 
-All functions are designed to work with numpy arrays and pandas DataFrames
+All functions are designed to work with numpy arrays and polars DataFrames
 from the Strand-Braid tracking system.
 """
 
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from pynumdiff.smooth_finite_difference import butterdiff
 from scipy.signal import find_peaks, savgol_filter
 from scipy.stats import circmean
@@ -189,11 +189,11 @@ def compute_heading_change(
 
 
 def smooth_trajectory(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     columns: List[str] = None,
     window: int = 21,
     polyorder: int = 3,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Apply Savitzky-Golay smoothing to trajectory columns.
 
@@ -209,11 +209,30 @@ def smooth_trajectory(
     if columns is None:
         columns = ["x", "y", "z", "xvel", "yvel", "zvel"]
 
-    df = df.copy()
+    df = df.clone()
+    new_columns = []
+
     for col in columns:
         if col in df.columns:
-            df[f"{col}_raw"] = df[col].copy()
-            df[col] = savgol_filter(df[col], window, polyorder)
+            # Store raw values
+            raw_values = df[col].to_numpy()
+            smoothed_values = savgol_filter(raw_values, window, polyorder)
+            new_columns.append(pl.Series(f"{col}_raw", raw_values))
+            new_columns.append(pl.Series(col, smoothed_values))
+
+    # Build expressions to update the dataframe
+    if new_columns:
+        # First add raw columns, then update smoothed ones
+        raw_cols = [c for c in new_columns if c.name.endswith("_raw")]
+        smoothed_cols = [c for c in new_columns if not c.name.endswith("_raw")]
+
+        # Add raw columns
+        for raw_col in raw_cols:
+            df = df.with_columns(raw_col)
+
+        # Update smoothed columns
+        for smooth_col in smoothed_cols:
+            df = df.with_columns(smooth_col)
 
     return df
 
@@ -370,6 +389,193 @@ def extract_saccade_events(
 
 
 # =============================================================================
+# Modified Geometric Saccade Detection (mGSD)
+# =============================================================================
+
+
+def _circular_median(angles: np.ndarray) -> float:
+    """
+    Compute the circular median of an array of angles.
+
+    Uses the arctan2(median(sin), median(cos)) approach which is robust
+    to angle wrapping at ±π.
+
+    Args:
+        angles: Array of angles in radians.
+
+    Returns:
+        Circular median angle in radians.
+    """
+    return np.arctan2(np.median(np.sin(angles)), np.median(np.cos(angles)))
+
+
+def _circular_distance(angle1: float, angle2: float) -> float:
+    """
+    Compute the absolute angular distance between two angles.
+
+    Uses the dot product formula: arccos(cos(a)cos(b) + sin(a)sin(b))
+    which gives the absolute difference in [0, π].
+
+    Args:
+        angle1: First angle in radians.
+        angle2: Second angle in radians.
+
+    Returns:
+        Absolute angular distance in radians [0, π].
+    """
+    dot_product = np.cos(angle1) * np.cos(angle2) + np.sin(angle1) * np.sin(angle2)
+    # Clamp to [-1, 1] to handle numerical errors
+    dot_product = np.clip(dot_product, -1.0, 1.0)
+    return np.abs(np.arccos(dot_product))
+
+
+def compute_mgsd_scores(
+    x: np.ndarray,
+    y: np.ndarray,
+    angular_velocity: np.ndarray,
+    delta_frames: int = 5,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute Modified Geometric Saccade Detection (mGSD) scores.
+
+    The mGSD algorithm detects saccades based on geometric properties of the
+    trajectory rather than angular velocity peaks. For each frame, it computes:
+
+    - Amplitude (A): The angular change between the median direction to "before"
+      points and the median direction to "after" points.
+    - Dispersion (D): Sum of distances from the current position to all points
+      in the surrounding window.
+    - Score (S): S = A² × D × sign(angular_velocity)
+
+    Reference:
+        Cellini, B., et al. (2024). Current Biology.
+        Modified from Censi, A., et al. original GSD algorithm.
+
+    Args:
+        x: Array of x positions.
+        y: Array of y positions.
+        angular_velocity: Angular velocity array (rad/s), used for determining
+            turn direction (sign of the score).
+        delta_frames: Number of frames before/after current frame to include
+            in the window. Default is 5 (50ms at 100Hz).
+
+    Returns:
+        Tuple of three arrays:
+            - scores: The mGSD score at each frame (signed by turn direction)
+            - amplitudes: The amplitude component A at each frame
+            - dispersions: The dispersion component D at each frame
+
+    Example:
+        >>> scores, amps, disps = compute_mgsd_scores(x, y, angular_velocity)
+        >>> # High |scores| indicate likely saccades
+    """
+    n = len(x)
+    scores = np.zeros(n)
+    amplitudes = np.zeros(n)
+    dispersions = np.zeros(n)
+
+    # Process each frame (excluding edges where we don't have full windows)
+    for k in range(delta_frames, n - delta_frames):
+        # Center coordinates on current position
+        ref_x, ref_y = x[k], y[k]
+        norm_x = x - ref_x
+        norm_y = y - ref_y
+
+        # Define before and after intervals
+        before_slice = slice(k - delta_frames, k)
+        after_slice = slice(k + 1, k + delta_frames + 1)
+
+        # Compute angles from current position to other points
+        # For "before" points: angle TO the before position (where fly came from)
+        alpha_before = np.arctan2(norm_y[before_slice], norm_x[before_slice])
+        # For "after" points: angle AWAY from the after position (opposite direction)
+        # This makes both angles represent "came from" direction
+        alpha_after = np.arctan2(-norm_y[after_slice], -norm_x[after_slice])
+
+        # Compute median angles
+        theta_before = _circular_median(alpha_before)
+        theta_after = _circular_median(alpha_after)
+
+        # Amplitude: angular difference between before and after directions
+        amp = _circular_distance(theta_before, theta_after)
+
+        # Dispersion: sum of distances in the full window
+        full_slice = slice(k - delta_frames, k + delta_frames + 1)
+        distances = np.sqrt(norm_x[full_slice] ** 2 + norm_y[full_slice] ** 2)
+        disp = np.sum(distances)
+
+        # Score: A² × D × sign(angular_velocity)
+        # Using amp² emphasizes larger turns
+        sign = np.sign(angular_velocity[k]) if angular_velocity[k] != 0 else 1
+        score = (amp**2) * disp * sign
+
+        scores[k] = score
+        amplitudes[k] = amp
+        dispersions[k] = disp
+
+    return scores, amplitudes, dispersions
+
+
+def detect_saccades_mgsd(
+    x: np.ndarray,
+    y: np.ndarray,
+    angular_velocity: np.ndarray,
+    delta_frames: int = 5,
+    threshold: float = 0.001,
+    min_spacing: int = 10,
+    return_scores: bool = False,
+) -> np.ndarray:
+    """
+    Detect saccades using the Modified Geometric Saccade Detection algorithm.
+
+    This algorithm detects saccades based on geometric properties of the
+    trajectory, combining amplitude (direction change) with dispersion
+    (movement magnitude). It is more robust than velocity-based detection
+    for slow or noisy trajectories.
+
+    Args:
+        x: Array of x positions.
+        y: Array of y positions.
+        angular_velocity: Angular velocity array (rad/s).
+        delta_frames: Window size in frames (default 5 = 50ms at 100Hz).
+        threshold: Minimum |score| for peak detection (default 0.001).
+        min_spacing: Minimum frames between detected peaks (default 10).
+        return_scores: If True, also return the score arrays.
+
+    Returns:
+        Array of frame indices where saccades were detected.
+        If return_scores=True, returns tuple of (peaks, scores, amplitudes, dispersions).
+
+    Example:
+        >>> # Basic usage
+        >>> peaks = detect_saccades_mgsd(x, y, angular_velocity)
+        >>>
+        >>> # Get scores for visualization
+        >>> peaks, scores, amps, disps = detect_saccades_mgsd(
+        ...     x, y, angular_velocity, return_scores=True
+        ... )
+    """
+    # Compute mGSD scores
+    scores, amplitudes, dispersions = compute_mgsd_scores(
+        x, y, angular_velocity, delta_frames=delta_frames
+    )
+
+    # Find peaks in absolute score
+    # Use prominence = 2*threshold as in reference implementation
+    peaks, _ = find_peaks(
+        np.abs(scores),
+        height=threshold,
+        distance=min_spacing,
+        prominence=threshold * 2,
+    )
+
+    if return_scores:
+        return peaks, scores, amplitudes, dispersions
+
+    return peaks
+
+
+# =============================================================================
 # Flight State Classification
 # =============================================================================
 
@@ -402,26 +608,33 @@ def classify_flight_state(
         >>> flight_frames = np.sum(is_flying)
         >>> print(f"Flying {flight_frames / len(is_flying) * 100:.1f}% of time")
     """
-    # Compute rolling mean for noise reduction
+    # Compute rolling mean for noise reduction using polars
     window = int(fps)  # 1-second window
-    rolling_mean = pd.Series(linear_velocity).rolling(window, center=True).mean()
+    rolling_mean = pl.Series(linear_velocity).rolling_mean(window_size=window, center=True)
+    rolling_mean_arr = rolling_mean.to_numpy()
 
     # State machine with hysteresis
     states = np.zeros(len(linear_velocity), dtype=bool)
     current_state = False  # Start in non-flight
     frame_count = 0
 
-    for i in range(len(rolling_mean)):
+    for i in range(len(rolling_mean_arr)):
+        val = rolling_mean_arr[i]
+        # Handle NaN values at boundaries
+        if np.isnan(val):
+            states[i] = current_state
+            continue
+
         # Check for potential state transition
         if current_state:
             # Currently flying - check for exit
-            if rolling_mean.iloc[i] < low_threshold:
+            if val < low_threshold:
                 frame_count += 1
             else:
                 frame_count = 0
         else:
             # Currently not flying - check for entry
-            if rolling_mean.iloc[i] > high_threshold:
+            if val > high_threshold:
                 frame_count += 1
             else:
                 frame_count = 0
@@ -498,9 +711,9 @@ def extract_flight_bouts(
 
 
 def add_kinematics_to_trajectory(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     config: Config = None,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Add computed kinematic columns to a trajectory DataFrame.
 
@@ -520,28 +733,31 @@ def add_kinematics_to_trajectory(
     if config is None:
         config = DEFAULT_CONFIG
 
-    df = df.copy()
-
     # Compute velocities
     heading, angular_velocity = compute_angular_velocity(
-        df["xvel"].values, df["yvel"].values, dt=config.dt
+        df["xvel"].to_numpy(), df["yvel"].to_numpy(), dt=config.dt
     )
     linear_velocity = compute_linear_velocity(
-        df["xvel"].values, df["yvel"].values, df["zvel"].values
+        df["xvel"].to_numpy(), df["yvel"].to_numpy(), df["zvel"].to_numpy()
     )
 
-    # Add to DataFrame
-    df["heading"] = heading
-    df["angular_velocity"] = angular_velocity
-    df["linear_velocity"] = linear_velocity
-
     # Classify flight state
-    df["is_flying"] = classify_flight_state(
+    is_flying = classify_flight_state(
         linear_velocity,
         high_threshold=config.flight_high_threshold,
         low_threshold=config.flight_low_threshold,
         min_frames=config.flight_min_frames,
         fps=config.fps,
+    )
+
+    # Add columns to DataFrame
+    df = df.with_columns(
+        [
+            pl.Series("heading", heading),
+            pl.Series("angular_velocity", angular_velocity),
+            pl.Series("linear_velocity", linear_velocity),
+            pl.Series("is_flying", is_flying),
+        ]
     )
 
     return df

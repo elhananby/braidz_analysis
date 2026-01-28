@@ -133,7 +133,9 @@ from .kinematics import (
     compute_angular_velocity,
     compute_heading_change,
     compute_linear_velocity,
+    compute_mgsd_scores,
     detect_saccades,
+    detect_saccades_mgsd,
     extract_flight_bouts,
     smooth_trajectory,
 )
@@ -192,6 +194,8 @@ __all__ = [
     "compute_linear_velocity",
     "compute_heading_change",
     "detect_saccades",
+    "detect_saccades_mgsd",
+    "compute_mgsd_scores",
     "classify_flight_state",
     "extract_flight_bouts",
     "smooth_trajectory",
