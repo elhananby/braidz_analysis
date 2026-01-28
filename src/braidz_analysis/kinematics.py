@@ -448,7 +448,7 @@ def compute_mgsd_scores(
     - Score (S): S = A² × D × sign(angular_velocity)
 
     Reference:
-        Cellini, B., et al. (2024). Current Biology.
+        Stupski, S., et al. (2024). Current Biology.
         Modified from Censi, A., et al. original GSD algorithm.
 
     Args:
