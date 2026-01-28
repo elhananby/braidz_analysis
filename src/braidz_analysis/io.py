@@ -20,7 +20,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Union
 
-import pandas as pd
+import polars as pl
 from tqdm import tqdm
 
 # =============================================================================
@@ -104,14 +104,14 @@ class BraidzData:
         source_files: List of source file paths that were loaded.
     """
 
-    trajectories: pd.DataFrame
-    opto: Optional[pd.DataFrame] = None
-    stim: Optional[pd.DataFrame] = None
-    other_csvs: Optional[Dict[str, pd.DataFrame]] = None
+    trajectories: pl.DataFrame
+    opto: Optional[pl.DataFrame] = None
+    stim: Optional[pl.DataFrame] = None
+    other_csvs: Optional[Dict[str, pl.DataFrame]] = None
     source_files: Optional[List[str]] = None
 
     def __repr__(self) -> str:
-        n_traj = self.trajectories["obj_id"].nunique() if len(self.trajectories) > 0 else 0
+        n_traj = self.trajectories["obj_id"].n_unique() if len(self.trajectories) > 0 else 0
         n_frames = len(self.trajectories)
         opto_str = f", {len(self.opto)} opto events" if self.opto is not None else ""
         stim_str = f", {len(self.stim)} stim events" if self.stim is not None else ""
@@ -191,7 +191,7 @@ def _read_csv_from_archive(
     filename: str,
     exp_num: int,
     use_pyarrow: bool = True,
-) -> Optional[pd.DataFrame]:
+) -> Optional[pl.DataFrame]:
     """
     Read a CSV file from a ZIP archive with error handling.
 
@@ -225,29 +225,48 @@ def _read_csv_from_archive(
                     content = first_line + f.read()
 
             try:
-                df = pv.read_csv(
+                arrow_table = pv.read_csv(
                     pa.py_buffer(content.encode("utf-8")),
                     read_options=pv.ReadOptions(),
-                ).to_pandas()
+                )
+                df = pl.from_arrow(arrow_table)
             except pa.ArrowInvalid as e:
                 if "Empty CSV file" in str(e):
                     raise EmptyKalmanError(f"Empty {filename}")
                 raise
 
         else:
-            # Use pandas for other files or when PyArrow unavailable
-            compression = "gzip" if filename.endswith(".gz") else None
-            df = pd.read_csv(
-                archive.open(filename),
-                compression=compression,
-                comment="#" if is_kalman else None,
-            )
+            # Use polars for other files or when PyArrow unavailable
+            file_bytes = archive.read(filename)
+            if filename.endswith(".gz"):
+                file_bytes = gzip.decompress(file_bytes)
+
+            # Handle comment lines for kalman files
+            if is_kalman:
+                content = file_bytes.decode("utf-8")
+                lines = content.split("\n")
+                # Skip comment lines
+                filtered_lines = [line for line in lines if not line.startswith("#")]
+                content = "\n".join(filtered_lines)
+                file_bytes = content.encode("utf-8")
+
+            if len(file_bytes.strip()) == 0:
+                if is_kalman:
+                    raise EmptyKalmanError(f"Empty {filename}")
+                return None
+
+            df = pl.read_csv(io.BytesIO(file_bytes))
+
+        if len(df) == 0:
+            if is_kalman:
+                raise EmptyKalmanError(f"Empty {filename}")
+            return None
 
         # Add experiment number for multi-file loading
-        df["exp_num"] = exp_num
+        df = df.with_columns(pl.lit(exp_num).alias("exp_num"))
         return df
 
-    except pd.errors.EmptyDataError:
+    except pl.exceptions.NoDataError:
         if filename == CSVFiles.KALMAN:
             raise EmptyKalmanError(f"Empty {filename}")
         logger.debug(f"Empty {filename} in archive")
@@ -255,16 +274,16 @@ def _read_csv_from_archive(
 
 
 def _filter_short_trajectories(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     min_frames: int = 100,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Remove trajectories with fewer than min_frames data points.
 
     This pre-filtering step reduces memory usage when loading many files.
     """
     group_cols = ["exp_num", "obj_id"] if "exp_num" in df.columns else ["obj_id"]
-    return df.groupby(group_cols).filter(lambda x: len(x) >= min_frames).reset_index(drop=True)
+    return df.filter(pl.len().over(group_cols) >= min_frames)
 
 
 # =============================================================================
@@ -291,9 +310,9 @@ def read_braidz(
         base_folder: Optional base folder to prepend to all file paths.
 
         engine: CSV parsing engine.
-            - "auto": Use PyArrow if available, otherwise pandas
+            - "auto": Use PyArrow if available, otherwise polars
             - "pyarrow": Force PyArrow (faster for large files)
-            - "pandas": Force pandas
+            - "pandas": Force polars (legacy option name, now uses polars)
 
         pre_filter: If True, remove trajectories shorter than min_frames
             during loading. Reduces memory usage for large datasets.
@@ -345,14 +364,14 @@ def read_braidz(
         use_pyarrow = engine == "pyarrow"
 
     if use_pyarrow and not PYARROW_AVAILABLE:
-        logger.warning("PyArrow requested but not available, falling back to pandas")
+        logger.warning("PyArrow requested but not available, falling back to polars")
         use_pyarrow = False
 
     # Containers for combined data
-    all_trajectories: List[pd.DataFrame] = []
-    all_opto: List[pd.DataFrame] = []
-    all_stim: List[pd.DataFrame] = []
-    all_other_csvs: Dict[str, List[pd.DataFrame]] = {}
+    all_trajectories: List[pl.DataFrame] = []
+    all_opto: List[pl.DataFrame] = []
+    all_stim: List[pl.DataFrame] = []
+    all_other_csvs: Dict[str, List[pl.DataFrame]] = {}
     skipped_files: List[str] = []
 
     # Process each file
@@ -394,10 +413,12 @@ def read_braidz(
                 for name in archive.namelist():
                     if name.endswith(".csv") and name not in excluded:
                         try:
-                            other_df = pd.read_csv(archive.open(name))
-                            other_df["exp_num"] = exp_num
-                            all_other_csvs.setdefault(name, []).append(other_df)
-                        except pd.errors.EmptyDataError:
+                            file_bytes = archive.read(name)
+                            if len(file_bytes.strip()) > 0:
+                                other_df = pl.read_csv(io.BytesIO(file_bytes))
+                                other_df = other_df.with_columns(pl.lit(exp_num).alias("exp_num"))
+                                all_other_csvs.setdefault(name, []).append(other_df)
+                        except pl.exceptions.NoDataError:
                             logger.debug(f"Empty {name} in archive")
 
         except zipfile.BadZipFile:
@@ -414,16 +435,14 @@ def read_braidz(
         raise ValueError("No valid trajectory data found in any of the provided files")
 
     # Combine all data
-    trajectories = pd.concat(all_trajectories, ignore_index=True)
-    opto = pd.concat(all_opto, ignore_index=True) if all_opto else None
-    stim = pd.concat(all_stim, ignore_index=True) if all_stim else None
+    trajectories = pl.concat(all_trajectories)
+    opto = pl.concat(all_opto) if all_opto else None
+    stim = pl.concat(all_stim) if all_stim else None
 
     # Combine other CSVs
     other_csvs = None
     if all_other_csvs:
-        other_csvs = {
-            name: pd.concat(dfs, ignore_index=True) for name, dfs in all_other_csvs.items()
-        }
+        other_csvs = {name: pl.concat(dfs) for name, dfs in all_other_csvs.items()}
 
     if skipped_files:
         logger.warning(f"Skipped {len(skipped_files)} file(s) due to errors")

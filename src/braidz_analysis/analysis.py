@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.signal import savgol_filter
 from tqdm import tqdm
 
@@ -58,7 +58,7 @@ class SaccadeResults:
     """
 
     traces: Dict[str, np.ndarray]
-    metrics: pd.DataFrame
+    metrics: pl.DataFrame
     config: Config = field(default_factory=lambda: DEFAULT_CONFIG)
 
     def __len__(self) -> int:
@@ -80,7 +80,7 @@ class SaccadeResults:
 
         Example:
             >>> left_turns = results.filter(direction=1)
-            >>> large_turns = results.filter(mask=np.abs(results.metrics['heading_change']) > 0.5)
+            >>> large_turns = results.filter(mask=np.abs(results.metrics['heading_change'].to_numpy()) > 0.5)
         """
         if mask is None:
             mask = np.ones(len(self), dtype=bool)
@@ -88,7 +88,7 @@ class SaccadeResults:
         # Apply column conditions
         for col, val in kwargs.items():
             if col in self.metrics.columns:
-                mask = mask & (self.metrics[col].values == val)
+                mask = mask & (self.metrics[col].to_numpy() == val)
 
         # Filter traces
         filtered_traces = {}
@@ -100,9 +100,13 @@ class SaccadeResults:
             elif arr.ndim == 3:
                 filtered_traces[key] = arr[mask, :, :]
 
+        # Filter metrics DataFrame
+        mask_series = pl.Series(mask)
+        filtered_metrics = self.metrics.filter(mask_series)
+
         return SaccadeResults(
             traces=filtered_traces,
-            metrics=self.metrics[mask].reset_index(drop=True),
+            metrics=filtered_metrics,
             config=self.config,
         )
 
@@ -149,15 +153,15 @@ class EventResults:
     """
 
     traces: Dict[str, np.ndarray]
-    metrics: pd.DataFrame
-    metadata: pd.DataFrame
+    metrics: pl.DataFrame
+    metadata: pl.DataFrame
     config: Config = field(default_factory=lambda: DEFAULT_CONFIG)
 
     def __len__(self) -> int:
         return len(self.metrics)
 
     def __repr__(self) -> str:
-        n_resp = self.metrics["responded"].sum() if "responded" in self.metrics else "?"
+        n_resp = self.metrics["responded"].sum() if "responded" in self.metrics.columns else "?"
         return f"EventResults({len(self)} events, {n_resp} responses)"
 
     def filter(self, mask: np.ndarray = None, **kwargs) -> "EventResults":
@@ -184,9 +188,9 @@ class EventResults:
         # Apply conditions from metrics
         for col, val in kwargs.items():
             if col in self.metrics.columns:
-                mask = mask & (self.metrics[col].values == val)
+                mask = mask & (self.metrics[col].to_numpy() == val)
             elif col in self.metadata.columns:
-                mask = mask & (self.metadata[col].values == val)
+                mask = mask & (self.metadata[col].to_numpy() == val)
 
         # Filter traces
         filtered_traces = {}
@@ -198,10 +202,15 @@ class EventResults:
             elif arr.ndim == 3:
                 filtered_traces[key] = arr[mask, :, :]
 
+        # Filter DataFrames
+        mask_series = pl.Series(mask)
+        filtered_metrics = self.metrics.filter(mask_series)
+        filtered_metadata = self.metadata.filter(mask_series)
+
         return EventResults(
             traces=filtered_traces,
-            metrics=self.metrics[mask].reset_index(drop=True),
-            metadata=self.metadata[mask].reset_index(drop=True),
+            metrics=filtered_metrics,
+            metadata=filtered_metadata,
             config=self.config,
         )
 
@@ -229,8 +238,8 @@ class EventResults:
             return self.filter(sham=True)
         return EventResults(
             traces={k: v[:0] for k, v in self.traces.items()},
-            metrics=self.metrics.iloc[:0],
-            metadata=self.metadata.iloc[:0],
+            metrics=self.metrics.head(0),
+            metadata=self.metadata.head(0),
             config=self.config,
         )
 
@@ -248,10 +257,10 @@ class EventResults:
 
 
 def filter_trajectories(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     config: Config = None,
     progressbar: bool = False,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """
     Filter trajectories based on quality criteria.
 
@@ -276,10 +285,24 @@ def filter_trajectories(
     group_cols = ["obj_id", "exp_num"] if "exp_num" in df.columns else ["obj_id"]
 
     valid_groups = []
-    grouped = df.groupby(group_cols)
 
-    iterator = tqdm(grouped, desc="Filtering trajectories", disable=not progressbar)
-    for group_key, grp in iterator:
+    # Get unique groups
+    unique_groups = df.select(group_cols).unique()
+
+    iterator = tqdm(
+        unique_groups.iter_rows(named=True),
+        desc="Filtering trajectories",
+        disable=not progressbar,
+        total=len(unique_groups),
+    )
+    for group_row in iterator:
+        # Build filter expression for this group
+        filter_expr = pl.lit(True)
+        for col in group_cols:
+            filter_expr = filter_expr & (pl.col(col) == group_row[col])
+
+        grp = df.filter(filter_expr)
+
         # Check minimum length
         if len(grp) < config.min_trajectory_frames:
             continue
@@ -290,15 +313,20 @@ def filter_trajectories(
             continue
 
         # Check radial position
-        radius = np.sqrt(grp["x"].values ** 2 + grp["y"].values ** 2)
+        x_vals = grp["x"].to_numpy()
+        y_vals = grp["y"].to_numpy()
+        radius = np.sqrt(x_vals**2 + y_vals**2)
         if np.median(radius) > config.max_radius:
             continue
 
         # Check for sufficient movement (not stationary)
+        x_range = grp["x"].max() - grp["x"].min()
+        y_range = grp["y"].max() - grp["y"].min()
+        z_range = grp["z"].max() - grp["z"].min()
         if (
-            np.ptp(grp["x"]) < config.min_position_range
-            or np.ptp(grp["y"]) < config.min_position_range
-            or np.ptp(grp["z"]) < config.min_position_range
+            x_range < config.min_position_range
+            or y_range < config.min_position_range
+            or z_range < config.min_position_range
         ):
             continue
 
@@ -306,9 +334,9 @@ def filter_trajectories(
 
     if not valid_groups:
         logger.warning("No trajectories passed quality filters")
-        return pd.DataFrame(columns=df.columns)
+        return df.head(0)
 
-    return pd.concat(valid_groups, ignore_index=True)
+    return pl.concat(valid_groups)
 
 
 # =============================================================================
@@ -317,7 +345,7 @@ def filter_trajectories(
 
 
 def analyze_saccades(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     config: Config = None,
     filter_trajectories_first: bool = True,
     flight_only: bool = True,
@@ -363,13 +391,15 @@ def analyze_saccades(
                 "linear_velocity": np.array([]),
                 "position": np.array([]),
             },
-            metrics=pd.DataFrame(),
+            metrics=pl.DataFrame(),
             config=config,
         )
 
     # Determine grouping
     group_cols = ["obj_id", "exp_num"] if "exp_num" in df.columns else ["obj_id"]
-    grouped = df.groupby(group_cols)
+
+    # Get unique groups
+    unique_groups = df.select(group_cols).unique()
 
     # Storage for results
     all_angular_vel = []
@@ -379,20 +409,32 @@ def analyze_saccades(
 
     window_size = config.pre_frames + config.post_frames
 
-    iterator = tqdm(grouped, desc="Analyzing saccades", disable=not progressbar)
-    for group_key, grp in iterator:
+    iterator = tqdm(
+        unique_groups.iter_rows(named=True),
+        desc="Analyzing saccades",
+        disable=not progressbar,
+        total=len(unique_groups),
+    )
+    for group_row in iterator:
+        # Build filter expression for this group
+        filter_expr = pl.lit(True)
+        for col in group_cols:
+            filter_expr = filter_expr & (pl.col(col) == group_row[col])
+
+        grp = df.filter(filter_expr)
+
         # Compute kinematics
         heading, angular_velocity = compute_angular_velocity(
-            grp["xvel"].values, grp["yvel"].values, dt=config.dt
+            grp["xvel"].to_numpy(), grp["yvel"].to_numpy(), dt=config.dt
         )
         linear_velocity = compute_linear_velocity(
-            grp["xvel"].values, grp["yvel"].values, grp["zvel"].values
+            grp["xvel"].to_numpy(), grp["yvel"].to_numpy(), grp["zvel"].to_numpy()
         )
 
         # Get positions
-        x = savgol_filter(grp["x"].values, config.smoothing_window, config.smoothing_polyorder)
-        y = savgol_filter(grp["y"].values, config.smoothing_window, config.smoothing_polyorder)
-        z = savgol_filter(grp["z"].values, config.smoothing_window, config.smoothing_polyorder)
+        x = savgol_filter(grp["x"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
+        y = savgol_filter(grp["y"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
+        z = savgol_filter(grp["z"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
         position = np.column_stack([x, y, z])
 
         # Filter to flight only if requested
@@ -445,11 +487,11 @@ def analyze_saccades(
             }
 
             # Add trajectory identifiers
-            if isinstance(group_key, tuple):
-                metrics["obj_id"] = group_key[0]
-                metrics["exp_num"] = group_key[1]
+            if len(group_cols) > 1:
+                metrics["obj_id"] = group_row["obj_id"]
+                metrics["exp_num"] = group_row["exp_num"]
             else:
-                metrics["obj_id"] = group_key
+                metrics["obj_id"] = group_row["obj_id"]
 
             all_metrics.append(metrics)
 
@@ -460,21 +502,21 @@ def analyze_saccades(
             "linear_velocity": np.array(all_linear_vel),
             "position": np.array(all_positions),
         }
-        metrics_df = pd.DataFrame(all_metrics)
+        metrics_df = pl.DataFrame(all_metrics)
     else:
         traces = {
             "angular_velocity": np.empty((0, window_size)),
             "linear_velocity": np.empty((0, window_size)),
             "position": np.empty((0, window_size, 3)),
         }
-        metrics_df = pd.DataFrame()
+        metrics_df = pl.DataFrame()
 
     return SaccadeResults(traces=traces, metrics=metrics_df, config=config)
 
 
 def analyze_event_responses(
-    df: pd.DataFrame,
-    events: pd.DataFrame,
+    df: pl.DataFrame,
+    events: pl.DataFrame,
     config: Config = None,
     progressbar: bool = True,
 ) -> EventResults:
@@ -518,8 +560,8 @@ def analyze_event_responses(
         logger.warning("No events provided")
         return EventResults(
             traces={},
-            metrics=pd.DataFrame(),
-            metadata=pd.DataFrame(),
+            metrics=pl.DataFrame(),
+            metadata=pl.DataFrame(),
             config=config,
         )
 
@@ -533,8 +575,10 @@ def analyze_event_responses(
     window_size = config.pre_frames + config.post_frames
 
     # Process each event
-    iterator = tqdm(events.iterrows(), total=len(events), disable=not progressbar)
-    for _, event_row in iterator:
+    iterator = tqdm(
+        events.iter_rows(named=True), total=len(events), disable=not progressbar
+    )
+    for event_row in iterator:
         try:
             obj_id = int(event_row["obj_id"])
             frame = int(event_row["frame"])
@@ -544,9 +588,9 @@ def analyze_event_responses(
 
         # Find corresponding trajectory
         if exp_num is not None:
-            grp = df[(df["obj_id"] == obj_id) & (df["exp_num"] == exp_num)]
+            grp = df.filter((pl.col("obj_id") == obj_id) & (pl.col("exp_num") == exp_num))
         else:
-            grp = df[df["obj_id"] == obj_id]
+            grp = df.filter(pl.col("obj_id") == obj_id)
 
         # Check minimum length
         if len(grp) < config.min_trajectory_frames:
@@ -555,7 +599,8 @@ def analyze_event_responses(
 
         # Find event index in trajectory
         try:
-            frame_indices = np.where(grp["frame"].values == frame)[0]
+            frame_values = grp["frame"].to_numpy()
+            frame_indices = np.where(frame_values == frame)[0]
             if len(frame_indices) == 0:
                 continue
             event_idx = frame_indices[0]
@@ -572,16 +617,16 @@ def analyze_event_responses(
 
         # Compute kinematics
         heading, angular_velocity = compute_angular_velocity(
-            grp["xvel"].values, grp["yvel"].values, dt=config.dt
+            grp["xvel"].to_numpy(), grp["yvel"].to_numpy(), dt=config.dt
         )
         linear_velocity = compute_linear_velocity(
-            grp["xvel"].values, grp["yvel"].values, grp["zvel"].values
+            grp["xvel"].to_numpy(), grp["yvel"].to_numpy(), grp["zvel"].to_numpy()
         )
 
         # Get positions
-        x = savgol_filter(grp["x"].values, config.smoothing_window, config.smoothing_polyorder)
-        y = savgol_filter(grp["y"].values, config.smoothing_window, config.smoothing_polyorder)
-        z = savgol_filter(grp["z"].values, config.smoothing_window, config.smoothing_polyorder)
+        x = savgol_filter(grp["x"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
+        y = savgol_filter(grp["y"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
+        z = savgol_filter(grp["z"].to_numpy(), config.smoothing_window, config.smoothing_polyorder)
         position = np.column_stack([x, y, z])
 
         # Find response saccade (first saccade in response window)
@@ -623,9 +668,10 @@ def analyze_event_responses(
             # Determine reference index based on available metadata
             # For opto: use center of stimulus duration
             # For stim: use end of response window (or could be customized)
-            if "duration" in event_row.index and pd.notna(event_row["duration"]):
+            duration_val = event_row.get("duration")
+            if duration_val is not None:
                 # Duration is typically in ms, convert to frames
-                duration_frames = int(event_row["duration"] / 1000 * config.fps)
+                duration_frames = int(duration_val / 1000 * config.fps)
                 reference_idx = event_idx + duration_frames // 2
             else:
                 # Fallback: use center of response window
@@ -667,7 +713,7 @@ def analyze_event_responses(
         )
 
         # Store metadata from event row (all columns that aren't identifiers)
-        metadata_cols = [c for c in event_row.index if c not in ["obj_id", "exp_num", "frame"]]
+        metadata_cols = [c for c in event_row.keys() if c not in ["obj_id", "exp_num", "frame"]]
         all_metadata.append({c: event_row[c] for c in metadata_cols})
 
     # Convert to arrays
@@ -677,16 +723,16 @@ def analyze_event_responses(
             "linear_velocity": np.array(all_linear_vel),
             "position": np.array(all_positions),
         }
-        metrics_df = pd.DataFrame(all_metrics)
-        metadata_df = pd.DataFrame(all_metadata)
+        metrics_df = pl.DataFrame(all_metrics)
+        metadata_df = pl.DataFrame(all_metadata)
     else:
         traces = {
             "angular_velocity": np.empty((0, window_size)),
             "linear_velocity": np.empty((0, window_size)),
             "position": np.empty((0, window_size, 3)),
         }
-        metrics_df = pd.DataFrame()
-        metadata_df = pd.DataFrame()
+        metrics_df = pl.DataFrame()
+        metadata_df = pl.DataFrame()
 
     return EventResults(
         traces=traces,
@@ -701,7 +747,7 @@ def analyze_event_responses(
 # =============================================================================
 
 
-def compute_response_statistics(results: EventResults) -> pd.DataFrame:
+def compute_response_statistics(results: EventResults) -> pl.DataFrame:
     """
     Compute summary statistics for event responses.
 
@@ -715,23 +761,23 @@ def compute_response_statistics(results: EventResults) -> pd.DataFrame:
         DataFrame with statistics per condition.
     """
     if len(results) == 0:
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     # Combine metrics and metadata
-    combined = pd.concat([results.metrics, results.metadata], axis=1)
+    combined = pl.concat([results.metrics, results.metadata], how="horizontal")
 
     # Find categorical columns to group by
     group_cols = []
     for col in results.metadata.columns:
-        if results.metadata[col].nunique() < 20:  # Likely categorical
+        if results.metadata[col].n_unique() < 20:  # Likely categorical
             group_cols.append(col)
 
     if not group_cols:
         # No grouping - compute overall stats
-        return pd.DataFrame(
+        return pl.DataFrame(
             {
                 "n_events": [len(results)],
-                "n_responses": [results.metrics["responded"].sum()],
+                "n_responses": [int(results.metrics["responded"].sum())],
                 "response_rate": [results.response_rate],
                 "mean_heading_change": [results.metrics["heading_change"].abs().mean()],
                 "mean_reaction_time": [results.metrics["reaction_time"].mean()],
@@ -740,17 +786,21 @@ def compute_response_statistics(results: EventResults) -> pd.DataFrame:
 
     # Group and compute statistics
     stats = []
-    for group_vals, group_df in combined.groupby(group_cols):
-        if not isinstance(group_vals, tuple):
-            group_vals = (group_vals,)
+    for group_row in combined.select(group_cols).unique().iter_rows(named=True):
+        # Build filter for this group
+        filter_expr = pl.lit(True)
+        for col in group_cols:
+            filter_expr = filter_expr & (pl.col(col) == group_row[col])
 
-        stat_row = dict(zip(group_cols, group_vals))
+        group_df = combined.filter(filter_expr)
+
+        stat_row = dict(group_row)
         stat_row["n_events"] = len(group_df)
-        stat_row["n_responses"] = group_df["responded"].sum()
+        stat_row["n_responses"] = int(group_df["responded"].sum())
         stat_row["response_rate"] = group_df["responded"].mean()
         stat_row["mean_heading_change"] = group_df["heading_change"].abs().mean()
         stat_row["mean_reaction_time"] = group_df["reaction_time"].mean()
 
         stats.append(stat_row)
 
-    return pd.DataFrame(stats)
+    return pl.DataFrame(stats)

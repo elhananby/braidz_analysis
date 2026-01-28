@@ -1,6 +1,6 @@
 [project]
 name = "braidz-analysis"
-version = "0.3.0"
+version = "0.4.0"
 description = "Analysis tools for fruit fly flight trajectories from the Strand-Braid tracking system"
 readme = "README.md"
 license = { text = "MIT" }
@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     # Core scientific computing
     "numpy>=2.0.0",
-    "pandas>=2.0.0",
+    "polars>=1.0.0",
     "scipy>=1.10.0",
     "ipykernel>=6.29.5",
     "jupyter>=1.1.1",

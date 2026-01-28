@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
+import polars as pl
 import seaborn as sns
 
 from .analysis import EventResults, SaccadeResults
@@ -247,8 +248,8 @@ def plot_heading_distribution(
         >>> # Polar plot
         >>> plot_heading_distribution(results, polar=True)
     """
-    # Get heading changes
-    heading_changes = results.metrics["heading_change"].dropna().values
+    # Get heading changes and drop nulls
+    heading_changes = results.metrics["heading_change"].drop_nulls().to_numpy()
 
     if len(heading_changes) == 0:
         if ax is None:
@@ -321,16 +322,14 @@ def plot_heading_comparison(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 4))
 
-    # Build DataFrame for seaborn
+    # Build DataFrame for seaborn (convert to pandas at the boundary)
     data = []
     for group, results in zip(groups, results_list):
-        hc = results.metrics["heading_change"].dropna().values
+        hc = results.metrics["heading_change"].drop_nulls().to_numpy()
         for val in hc:
             data.append({"Group": group, "Heading Change": val})
 
-    import pandas as pd
-
-    df = pd.DataFrame(data)
+    df = pl.DataFrame(data).to_pandas()
 
     # Plot
     sns.violinplot(
@@ -477,23 +476,35 @@ def plot_response_rate_by_group(
             f"Column '{group_by}' not in metadata. Available: {list(results.metadata.columns)}"
         )
 
-    # Compute response rates
-    import pandas as pd
+    # Compute response rates using polars
+    combined = pl.concat([results.metrics, results.metadata], how="horizontal")
 
-    combined = pd.concat([results.metrics, results.metadata], axis=1)
-    stats = combined.groupby(group_by)["responded"].agg(["mean", "sum", "count"])
-    stats.columns = ["rate", "n_responses", "n_total"]
+    # Group by and compute statistics
+    stats = (
+        combined.group_by(group_by)
+        .agg(
+            [
+                pl.col("responded").mean().alias("rate"),
+                pl.col("responded").sum().alias("n_responses"),
+                pl.len().alias("n_total"),
+            ]
+        )
+        .sort(group_by)
+    )
 
     # Plot
-    ax.bar(range(len(stats)), stats["rate"], **kwargs)
-    ax.set_xticks(range(len(stats)))
-    ax.set_xticklabels([str(x) for x in stats.index])
+    x_vals = range(len(stats))
+    rates = stats["rate"].to_numpy()
+    ax.bar(x_vals, rates, **kwargs)
+    ax.set_xticks(list(x_vals))
+    ax.set_xticklabels([str(x) for x in stats[group_by].to_list()])
     ax.set_xlabel(group_by.replace("_", " ").title())
     ax.set_ylabel("Response Rate")
     ax.set_ylim(0, 1)
 
     # Add count annotations
-    for i, (rate, n) in enumerate(zip(stats["rate"], stats["n_total"])):
+    n_totals = stats["n_total"].to_numpy()
+    for i, (rate, n) in enumerate(zip(rates, n_totals)):
         ax.annotate(
             f"n={int(n)}",
             xy=(i, rate + 0.02),
