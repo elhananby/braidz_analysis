@@ -351,8 +351,6 @@ def analyze_saccades(
     filter_trajectories_first: bool = True,
     flight_only: bool = True,
     progressbar: bool = True,
-    method: str = "velocity",
-    dispersion_method: str = "sum",
 ) -> SaccadeResults:
     """
     Detect and analyze all saccades in trajectory data.
@@ -360,43 +358,37 @@ def analyze_saccades(
     This function:
         1. Filters trajectories for quality (optional)
         2. Computes kinematics for each trajectory
-        3. Detects saccades using the specified method
+        3. Detects saccades using the method specified in config
         4. Extracts time-aligned traces around each saccade
         5. Computes saccade metrics (heading change, amplitude, etc.)
 
     Args:
         df: DataFrame with trajectory data (from read_braidz).
         config: Analysis configuration. Uses defaults if None.
+            Key config parameters for saccade detection:
+            - saccade_method: "velocity" or "mgsd"
+            - saccade_threshold, min_saccade_spacing (for velocity method)
+            - mgsd_threshold, mgsd_delta_frames, mgsd_dispersion (for mGSD)
         filter_trajectories_first: Apply quality filters before analysis.
         flight_only: Only analyze saccades during flight (not walking).
         progressbar: Show progress bar.
-        method: Saccade detection method. Options:
-            - "velocity": Angular velocity threshold-based detection (default)
-            - "mgsd": Modified Geometric Saccade Detection algorithm
-        dispersion_method: For mGSD only - how to compute dispersion. Options:
-            - "sum": Sum of distances (reference implementation)
-            - "mean": Mean distance (less sensitive to window size)
-            - "std": Standard deviation (as described in paper)
 
     Returns:
         SaccadeResults with traces and metrics for all detected saccades.
 
     Example:
         >>> data = read_braidz("experiment.braidz")
+        >>>
         >>> # Velocity-based detection (default)
         >>> saccades = analyze_saccades(data.trajectories)
         >>>
-        >>> # mGSD detection
-        >>> saccades_mgsd = analyze_saccades(data.trajectories, method="mgsd")
+        >>> # mGSD detection using preset
+        >>> saccades = analyze_saccades(data.trajectories, config=MGSD_CONFIG)
         >>>
-        >>> # mGSD with mean dispersion (more robust to window size)
-        >>> saccades_mgsd = analyze_saccades(
-        ...     data.trajectories, method="mgsd", dispersion_method="mean"
-        ... )
+        >>> # Custom mGSD config
+        >>> config = Config(saccade_method="mgsd", mgsd_threshold=0.0005)
+        >>> saccades = analyze_saccades(data.trajectories, config=config)
     """
-    valid_methods = {"velocity", "mgsd"}
-    if method not in valid_methods:
-        raise ValueError(f"method must be one of {valid_methods}, got '{method}'")
     if config is None:
         config = DEFAULT_CONFIG
 
@@ -476,8 +468,8 @@ def analyze_saccades(
             x = x[flight_mask]
             y = y[flight_mask]
 
-        # Detect saccades using selected method
-        if method == "velocity":
+        # Detect saccades using method specified in config
+        if config.saccade_method == "velocity":
             peaks = detect_saccades(
                 angular_velocity,
                 threshold=config.saccade_threshold,
@@ -491,7 +483,7 @@ def analyze_saccades(
                 delta_frames=config.mgsd_delta_frames,
                 threshold=config.mgsd_threshold,
                 min_spacing=config.mgsd_min_spacing,
-                dispersion_method=dispersion_method,
+                dispersion_method=config.mgsd_dispersion,
             )
 
         # Extract data around each saccade

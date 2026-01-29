@@ -120,7 +120,7 @@ from .analysis import (
 )
 
 # Configuration
-from .config import DEFAULT_CONFIG, OPTO_CONFIG, STIM_CONFIG, Config
+from .config import DEFAULT_CONFIG, MGSD_CONFIG, OPTO_CONFIG, STIM_CONFIG, Config
 from .io import BraidzData, read_braidz
 
 # =============================================================================
@@ -176,6 +176,7 @@ __all__ = [
     # Configuration
     "Config",
     "DEFAULT_CONFIG",
+    "MGSD_CONFIG",
     "OPTO_CONFIG",
     "STIM_CONFIG",
     # Plotting
