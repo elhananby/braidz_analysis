@@ -434,6 +434,7 @@ def compute_mgsd_scores(
     y: np.ndarray,
     angular_velocity: np.ndarray,
     delta_frames: int = 5,
+    dispersion_method: str = "sum",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute Modified Geometric Saccade Detection (mGSD) scores.
@@ -443,8 +444,8 @@ def compute_mgsd_scores(
 
     - Amplitude (A): The angular change between the median direction to "before"
       points and the median direction to "after" points.
-    - Dispersion (D): Sum of distances from the current position to all points
-      in the surrounding window.
+    - Dispersion (D): A measure of distances from the current position to all
+      points in the surrounding window.
     - Score (S): S = A² × D × sign(angular_velocity)
 
     Reference:
@@ -458,6 +459,10 @@ def compute_mgsd_scores(
             turn direction (sign of the score).
         delta_frames: Number of frames before/after current frame to include
             in the window. Default is 5 (50ms at 100Hz).
+        dispersion_method: How to compute dispersion from distances. Options:
+            - "sum": Sum of distances (reference implementation, sensitive to window size)
+            - "mean": Mean distance (normalized, less sensitive to window size)
+            - "std": Standard deviation of distances (as described in paper)
 
     Returns:
         Tuple of three arrays:
@@ -468,7 +473,16 @@ def compute_mgsd_scores(
     Example:
         >>> scores, amps, disps = compute_mgsd_scores(x, y, angular_velocity)
         >>> # High |scores| indicate likely saccades
+        >>>
+        >>> # Use mean for window-size-independent dispersion
+        >>> scores, amps, disps = compute_mgsd_scores(
+        ...     x, y, angular_velocity, dispersion_method="mean"
+        ... )
     """
+    valid_methods = {"sum", "mean", "std"}
+    if dispersion_method not in valid_methods:
+        raise ValueError(f"dispersion_method must be one of {valid_methods}, got '{dispersion_method}'")
+
     n = len(x)
     scores = np.zeros(n)
     amplitudes = np.zeros(n)
@@ -499,10 +513,16 @@ def compute_mgsd_scores(
         # Amplitude: angular difference between before and after directions
         amp = _circular_distance(theta_before, theta_after)
 
-        # Dispersion: sum of distances in the full window
+        # Dispersion: computed from distances in the full window
         full_slice = slice(k - delta_frames, k + delta_frames + 1)
         distances = np.sqrt(norm_x[full_slice] ** 2 + norm_y[full_slice] ** 2)
-        disp = np.sum(distances)
+
+        if dispersion_method == "sum":
+            disp = np.sum(distances)
+        elif dispersion_method == "mean":
+            disp = np.mean(distances)
+        else:  # std
+            disp = np.std(distances)
 
         # Score: A² × D × sign(angular_velocity)
         # Using amp² emphasizes larger turns
@@ -523,6 +543,7 @@ def detect_saccades_mgsd(
     delta_frames: int = 5,
     threshold: float = 0.001,
     min_spacing: int = 10,
+    dispersion_method: str = "sum",
     return_scores: bool = False,
 ) -> np.ndarray:
     """
@@ -540,6 +561,10 @@ def detect_saccades_mgsd(
         delta_frames: Window size in frames (default 5 = 50ms at 100Hz).
         threshold: Minimum |score| for peak detection (default 0.001).
         min_spacing: Minimum frames between detected peaks (default 10).
+        dispersion_method: How to compute dispersion from distances. Options:
+            - "sum": Sum of distances (reference implementation, sensitive to window size)
+            - "mean": Mean distance (normalized, less sensitive to window size)
+            - "std": Standard deviation of distances (as described in paper)
         return_scores: If True, also return the score arrays.
 
     Returns:
@@ -554,10 +579,15 @@ def detect_saccades_mgsd(
         >>> peaks, scores, amps, disps = detect_saccades_mgsd(
         ...     x, y, angular_velocity, return_scores=True
         ... )
+        >>>
+        >>> # Use mean dispersion for consistent behavior across window sizes
+        >>> peaks = detect_saccades_mgsd(
+        ...     x, y, angular_velocity, dispersion_method="mean"
+        ... )
     """
     # Compute mGSD scores
     scores, amplitudes, dispersions = compute_mgsd_scores(
-        x, y, angular_velocity, delta_frames=delta_frames
+        x, y, angular_velocity, delta_frames=delta_frames, dispersion_method=dispersion_method
     )
 
     # Find peaks in absolute score
