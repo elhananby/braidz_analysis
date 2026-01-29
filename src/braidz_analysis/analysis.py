@@ -473,6 +473,8 @@ def analyze_saccades(
             linear_velocity = linear_velocity[flight_mask]
             position = position[flight_mask]
             heading = heading[flight_mask]
+            x = x[flight_mask]
+            y = y[flight_mask]
 
         # Detect saccades using selected method
         if method == "velocity":
