@@ -662,21 +662,43 @@ def analyze_event_responses(
         if config.detect_in_window_only:
             # Run saccade detection only within the response window
             # This is more sensitive to responses that might be suppressed by min_spacing
-            window_slice = angular_velocity[response_window_start:response_window_end]
-            window_peaks = detect_saccades(
-                window_slice,
-                threshold=config.saccade_threshold,
-                min_spacing=config.min_saccade_spacing,
-            )
+            if config.saccade_method == "velocity":
+                window_slice = angular_velocity[response_window_start:response_window_end]
+                window_peaks = detect_saccades(
+                    window_slice,
+                    threshold=config.saccade_threshold,
+                    min_spacing=config.min_saccade_spacing,
+                )
+            else:  # mgsd
+                window_peaks = detect_saccades_mgsd(
+                    x[response_window_start:response_window_end],
+                    y[response_window_start:response_window_end],
+                    angular_velocity[response_window_start:response_window_end],
+                    delta_frames=config.mgsd_delta_frames,
+                    threshold=config.mgsd_threshold,
+                    min_spacing=config.mgsd_min_spacing,
+                    dispersion_method=config.mgsd_dispersion,
+                )
             # Adjust indices back to full trajectory coordinates
             response_peaks = window_peaks + response_window_start
         else:
             # Default: detect on full trace, then filter to response window
-            peaks = detect_saccades(
-                angular_velocity,
-                threshold=config.saccade_threshold,
-                min_spacing=config.min_saccade_spacing,
-            )
+            if config.saccade_method == "velocity":
+                peaks = detect_saccades(
+                    angular_velocity,
+                    threshold=config.saccade_threshold,
+                    min_spacing=config.min_saccade_spacing,
+                )
+            else:  # mgsd
+                peaks = detect_saccades_mgsd(
+                    x,
+                    y,
+                    angular_velocity,
+                    delta_frames=config.mgsd_delta_frames,
+                    threshold=config.mgsd_threshold,
+                    min_spacing=config.mgsd_min_spacing,
+                    dispersion_method=config.mgsd_dispersion,
+                )
             response_peaks = peaks[(peaks >= response_window_start) & (peaks < response_window_end)]
 
         if len(response_peaks) > 0:
