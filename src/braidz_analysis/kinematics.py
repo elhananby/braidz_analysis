@@ -830,6 +830,7 @@ def extract_flight_bouts(
 def add_kinematics_to_trajectory(
     df: pl.DataFrame,
     config: Config = None,
+    group_by_trajectory: bool = True,
 ) -> pl.DataFrame:
     """
     Add computed kinematic columns to a trajectory DataFrame.
@@ -843,6 +844,9 @@ def add_kinematics_to_trajectory(
     Args:
         df: DataFrame with xvel, yvel, zvel columns.
         config: Analysis configuration.
+        group_by_trajectory: If True and multiple obj_ids or exp_nums are present,
+            compute kinematics for each trajectory separately to avoid boundary
+            artifacts from filtering operations. Default is True.
 
     Returns:
         DataFrame with added kinematic columns.
@@ -850,31 +854,57 @@ def add_kinematics_to_trajectory(
     if config is None:
         config = DEFAULT_CONFIG
 
-    # Compute velocities
-    heading, angular_velocity = compute_angular_velocity(
-        df["xvel"].to_numpy(), df["yvel"].to_numpy(), dt=config.dt
-    )
-    linear_velocity = compute_linear_velocity(
-        df["xvel"].to_numpy(), df["yvel"].to_numpy(), df["zvel"].to_numpy()
-    )
+    def compute_for_group(group_df: pl.DataFrame) -> pl.DataFrame:
+        """Compute kinematics for a single trajectory group."""
+        # Sort by frame to ensure correct order
+        if "frame" in group_df.columns:
+            group_df = group_df.sort("frame")
 
-    # Classify flight state
-    is_flying = classify_flight_state(
-        linear_velocity,
-        high_threshold=config.flight_high_threshold,
-        low_threshold=config.flight_low_threshold,
-        min_frames=config.flight_min_frames,
-        fps=config.fps,
-    )
+        # Compute velocities
+        heading, angular_velocity = compute_angular_velocity(
+            group_df["xvel"].to_numpy(), group_df["yvel"].to_numpy(), dt=config.dt
+        )
+        linear_velocity = compute_linear_velocity(
+            group_df["xvel"].to_numpy(),
+            group_df["yvel"].to_numpy(),
+            group_df["zvel"].to_numpy(),
+        )
 
-    # Add columns to DataFrame
-    df = df.with_columns(
-        [
-            pl.Series("heading", heading),
-            pl.Series("angular_velocity", angular_velocity),
-            pl.Series("linear_velocity", linear_velocity),
-            pl.Series("is_flying", is_flying),
-        ]
-    )
+        # Classify flight state
+        is_flying = classify_flight_state(
+            linear_velocity,
+            high_threshold=config.flight_high_threshold,
+            low_threshold=config.flight_low_threshold,
+            min_frames=config.flight_min_frames,
+            fps=config.fps,
+        )
+
+        # Add columns to DataFrame
+        group_df = group_df.with_columns(
+            [
+                pl.Series("heading", heading),
+                pl.Series("angular_velocity", angular_velocity),
+                pl.Series("linear_velocity", linear_velocity),
+                pl.Series("is_flying", is_flying),
+            ]
+        )
+
+        return group_df
+
+    # Determine grouping columns
+    group_cols = []
+    if group_by_trajectory:
+        if "exp_num" in df.columns:
+            group_cols.append("exp_num")
+        if "obj_id" in df.columns:
+            group_cols.append("obj_id")
+
+    # Apply computation per group or to entire DataFrame
+    if group_cols:
+        groups = df.partition_by(group_cols, maintain_order=True)
+        processed_groups = [compute_for_group(g) for g in groups]
+        df = pl.concat(processed_groups)
+    else:
+        df = compute_for_group(df)
 
     return df
