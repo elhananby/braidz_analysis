@@ -193,15 +193,24 @@ def smooth_trajectory(
     columns: List[str] = None,
     window: int = 21,
     polyorder: int = 3,
+    handle_gaps: bool = True,
+    max_gap: int = 5,
 ) -> pl.DataFrame:
     """
     Apply Savitzky-Golay smoothing to trajectory columns.
 
+    Smoothing is applied per trajectory (grouped by obj_id and exp_num if present).
+    Frame gaps are detected and handled to prevent distortion from non-uniform sampling.
+
     Args:
-        df: DataFrame with trajectory data.
+        df: DataFrame with trajectory data. Must have 'frame' column for gap detection.
         columns: Columns to smooth. Default: ['x', 'y', 'z', 'xvel', 'yvel', 'zvel']
         window: Smoothing window size (must be odd).
         polyorder: Polynomial order for smoothing.
+        handle_gaps: If True, detect frame gaps and smooth segments separately.
+        max_gap: Maximum allowed frame gap before splitting into segments.
+            Gaps larger than this will cause the trajectory to be smoothed
+            in separate segments.
 
     Returns:
         DataFrame with smoothed values (original data preserved with '_raw' suffix).
@@ -209,30 +218,108 @@ def smooth_trajectory(
     if columns is None:
         columns = ["x", "y", "z", "xvel", "yvel", "zvel"]
 
-    df = df.clone()
-    new_columns = []
+    # Filter to columns that exist
+    columns = [col for col in columns if col in df.columns]
+    if not columns:
+        return df
 
-    for col in columns:
-        if col in df.columns:
-            # Store raw values
-            raw_values = df[col].to_numpy()
-            smoothed_values = savgol_filter(raw_values, window, polyorder)
-            new_columns.append(pl.Series(f"{col}_raw", raw_values))
-            new_columns.append(pl.Series(col, smoothed_values))
+    # Determine grouping columns
+    group_cols = []
+    if "exp_num" in df.columns:
+        group_cols.append("exp_num")
+    if "obj_id" in df.columns:
+        group_cols.append("obj_id")
 
-    # Build expressions to update the dataframe
-    if new_columns:
-        # First add raw columns, then update smoothed ones
-        raw_cols = [c for c in new_columns if c.name.endswith("_raw")]
-        smoothed_cols = [c for c in new_columns if not c.name.endswith("_raw")]
+    # Store raw values first
+    raw_exprs = [pl.col(col).alias(f"{col}_raw") for col in columns]
+    df = df.with_columns(raw_exprs)
 
-        # Add raw columns
-        for raw_col in raw_cols:
-            df = df.with_columns(raw_col)
+    def smooth_group(group_df: pl.DataFrame) -> pl.DataFrame:
+        """Smooth a single trajectory group, handling gaps."""
+        # Sort by frame to ensure correct order
+        if "frame" in group_df.columns:
+            group_df = group_df.sort("frame")
 
-        # Update smoothed columns
-        for smooth_col in smoothed_cols:
-            df = df.with_columns(smooth_col)
+        n = len(group_df)
+
+        # Skip if too short for the window
+        if n < window:
+            # Return as-is (no smoothing possible)
+            return group_df
+
+        # Check for frame gaps
+        if handle_gaps and "frame" in group_df.columns:
+            frames = group_df["frame"].to_numpy()
+            frame_diffs = np.diff(frames)
+            gap_indices = np.where(frame_diffs > max_gap)[0]
+
+            if len(gap_indices) > 0:
+                # Split into segments and smooth each
+                segment_starts = [0] + (gap_indices + 1).tolist()
+                segment_ends = (gap_indices + 1).tolist() + [n]
+
+                smoothed_arrays = {col: np.full(n, np.nan) for col in columns}
+
+                for start, end in zip(segment_starts, segment_ends):
+                    seg_len = end - start
+                    if seg_len >= window:
+                        for col in columns:
+                            values = group_df[col].to_numpy()[start:end]
+                            # Handle NaN values by interpolation
+                            if np.any(np.isnan(values)):
+                                mask = ~np.isnan(values)
+                                if np.sum(mask) >= window:
+                                    values = np.interp(
+                                        np.arange(len(values)),
+                                        np.where(mask)[0],
+                                        values[mask],
+                                    )
+                                else:
+                                    continue
+                            smoothed_arrays[col][start:end] = savgol_filter(
+                                values, window, polyorder
+                            )
+                    elif seg_len > 0:
+                        # Segment too short, keep original values
+                        for col in columns:
+                            smoothed_arrays[col][start:end] = group_df[col].to_numpy()[
+                                start:end
+                            ]
+
+                # Update columns with smoothed values
+                for col in columns:
+                    group_df = group_df.with_columns(
+                        pl.Series(col, smoothed_arrays[col])
+                    )
+                return group_df
+
+        # No gaps or gap handling disabled - smooth entire trajectory
+        for col in columns:
+            values = group_df[col].to_numpy()
+
+            # Handle NaN values
+            if np.any(np.isnan(values)):
+                mask = ~np.isnan(values)
+                if np.sum(mask) >= window:
+                    values = np.interp(
+                        np.arange(len(values)), np.where(mask)[0], values[mask]
+                    )
+                else:
+                    continue
+
+            smoothed = savgol_filter(values, window, polyorder)
+            group_df = group_df.with_columns(pl.Series(col, smoothed))
+
+        return group_df
+
+    # Apply smoothing per group
+    if group_cols:
+        # Process each group and collect results
+        groups = df.partition_by(group_cols, maintain_order=True)
+        smoothed_groups = [smooth_group(g) for g in groups]
+        df = pl.concat(smoothed_groups)
+    else:
+        df = smooth_group(df)
 
     return df
 
