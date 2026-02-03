@@ -136,6 +136,12 @@ class Config:
     due to earlier saccades outside the window.
     """
 
+    response_trace_pre_frames: int = 50
+    """Frames to extract before the response peak for response-centered traces."""
+
+    response_trace_post_frames: int = 50
+    """Frames to extract after the response peak for response-centered traces."""
+
     # =========================================================================
     # Trajectory Quality Filters
     # =========================================================================
@@ -143,7 +149,7 @@ class Config:
     min_trajectory_frames: int = 150
     """Minimum trajectory length (frames) to include in analysis."""
 
-    z_bounds: tuple[float, float] = (0.05, 0.3)
+    z_bounds: tuple[float, float] = (0.05, 0.25)
     """Valid vertical position range (min, max) in meters."""
 
     max_radius: float = 0.23

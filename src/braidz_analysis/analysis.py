@@ -128,10 +128,18 @@ class EventResults:
     Results from event-triggered analysis (opto or stim).
 
     Attributes:
-        traces: Dictionary of time-aligned arrays (n_events, n_frames):
+        traces: Dictionary of time-aligned arrays (n_events, n_frames) centered on event onset:
             - angular_velocity: Angular velocity around each event
             - linear_velocity: Linear velocity around each event
             - position: Position (n_events, n_frames, 3)
+
+        response_traces: Dictionary of time-aligned arrays centered on response/reference point:
+            - angular_velocity: Angular velocity around response peak
+            - linear_velocity: Linear velocity around response peak
+            - position: Position (n_events, n_frames, 3)
+            For responsive trials, centered on the detected saccade peak.
+            For non-responsive trials, centered on the expected response location
+            (center of stimulus duration or response window).
 
         metrics: DataFrame with one row per event:
             - responded: Whether a saccade occurred in response window
@@ -147,13 +155,14 @@ class EventResults:
         config: Configuration used for analysis.
 
     Note:
-        For non-responsive trials, metrics are computed at a reference point:
+        For non-responsive trials, metrics and response_traces are computed at a reference point:
         - If 'duration' is in metadata (opto): center of stimulus duration
         - Otherwise: center of response window
         This allows comparison between responsive and non-responsive trials.
     """
 
     traces: Dict[str, np.ndarray]
+    response_traces: Dict[str, np.ndarray]
     metrics: pl.DataFrame
     metadata: pl.DataFrame
     config: Config = field(default_factory=lambda: DEFAULT_CONFIG)
@@ -203,6 +212,16 @@ class EventResults:
             elif arr.ndim == 3:
                 filtered_traces[key] = arr[mask, :, :]
 
+        # Filter response traces
+        filtered_response_traces = {}
+        for key, arr in self.response_traces.items():
+            if arr.ndim == 1:
+                filtered_response_traces[key] = arr[mask]
+            elif arr.ndim == 2:
+                filtered_response_traces[key] = arr[mask, :]
+            elif arr.ndim == 3:
+                filtered_response_traces[key] = arr[mask, :, :]
+
         # Filter DataFrames
         mask_series = pl.Series(mask)
         filtered_metrics = self.metrics.filter(mask_series)
@@ -210,6 +229,7 @@ class EventResults:
 
         return EventResults(
             traces=filtered_traces,
+            response_traces=filtered_response_traces,
             metrics=filtered_metrics,
             metadata=filtered_metadata,
             config=self.config,
@@ -239,6 +259,7 @@ class EventResults:
             return self.filter(sham=True)
         return EventResults(
             traces={k: v[:0] for k, v in self.traces.items()},
+            response_traces={k: v[:0] for k, v in self.response_traces.items()},
             metrics=self.metrics.head(0),
             metadata=self.metadata.head(0),
             config=self.config,
@@ -585,6 +606,7 @@ def analyze_event_responses(
         logger.warning("No events provided")
         return EventResults(
             traces={},
+            response_traces={},
             metrics=pl.DataFrame(),
             metadata=pl.DataFrame(),
             config=config,
@@ -594,10 +616,14 @@ def analyze_event_responses(
     all_angular_vel = []
     all_linear_vel = []
     all_positions = []
+    all_resp_angular_vel = []
+    all_resp_linear_vel = []
+    all_resp_positions = []
     all_metrics = []
     all_metadata = []
 
     window_size = config.pre_frames + config.post_frames
+    resp_window_size = config.response_trace_pre_frames + config.response_trace_post_frames
 
     # Process each event
     iterator = tqdm(
@@ -745,6 +771,20 @@ def analyze_event_responses(
         all_linear_vel.append(linear_velocity[start:end])
         all_positions.append(position[start:end])
 
+        # Extract response-centered traces around reference_idx
+        resp_start = reference_idx - config.response_trace_pre_frames
+        resp_end = reference_idx + config.response_trace_post_frames
+
+        if resp_start >= 0 and resp_end <= len(angular_velocity):
+            all_resp_angular_vel.append(angular_velocity[resp_start:resp_end])
+            all_resp_linear_vel.append(linear_velocity[resp_start:resp_end])
+            all_resp_positions.append(position[resp_start:resp_end])
+        else:
+            # Not enough data around response point, fill with NaN
+            all_resp_angular_vel.append(np.full(resp_window_size, np.nan))
+            all_resp_linear_vel.append(np.full(resp_window_size, np.nan))
+            all_resp_positions.append(np.full((resp_window_size, 3), np.nan))
+
         # Store metrics
         all_metrics.append(
             {
@@ -770,6 +810,11 @@ def analyze_event_responses(
             "linear_velocity": np.array(all_linear_vel),
             "position": np.array(all_positions),
         }
+        response_traces = {
+            "angular_velocity": np.array(all_resp_angular_vel),
+            "linear_velocity": np.array(all_resp_linear_vel),
+            "position": np.array(all_resp_positions),
+        }
         metrics_df = pl.DataFrame(all_metrics)
         metadata_df = pl.DataFrame(all_metadata)
     else:
@@ -778,11 +823,17 @@ def analyze_event_responses(
             "linear_velocity": np.empty((0, window_size)),
             "position": np.empty((0, window_size, 3)),
         }
+        response_traces = {
+            "angular_velocity": np.empty((0, resp_window_size)),
+            "linear_velocity": np.empty((0, resp_window_size)),
+            "position": np.empty((0, resp_window_size, 3)),
+        }
         metrics_df = pl.DataFrame()
         metadata_df = pl.DataFrame()
 
     return EventResults(
         traces=traces,
+        response_traces=response_traces,
         metrics=metrics_df,
         metadata=metadata_df,
         config=config,
