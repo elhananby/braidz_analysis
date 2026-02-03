@@ -390,7 +390,21 @@ def read_braidz(
                         raise InvalidBraidzError(f"No {CSVFiles.KALMAN} in {filepath}")
 
                     if pre_filter:
+                        original_count = kalman_df["obj_id"].n_unique()
                         kalman_df = _filter_short_trajectories(kalman_df, min_frames)
+                        filtered_count = kalman_df["obj_id"].n_unique() if len(kalman_df) > 0 else 0
+                        if filtered_count == 0:
+                            logger.warning(
+                                f"Skipping {filepath}: no trajectories >= {min_frames} frames "
+                                f"(had {original_count} shorter trajectories)"
+                            )
+                            skipped_files.append(filepath)
+                            continue
+                        elif filtered_count < original_count:
+                            logger.debug(
+                                f"{filepath}: kept {filtered_count}/{original_count} trajectories "
+                                f"(filtered by min_frames={min_frames})"
+                            )
 
                     all_trajectories.append(kalman_df)
 
@@ -420,6 +434,10 @@ def read_braidz(
                                 all_other_csvs.setdefault(name, []).append(other_df)
                         except pl.exceptions.NoDataError:
                             logger.debug(f"Empty {name} in archive")
+                        except pl.exceptions.ComputeError as e:
+                            logger.warning(f"Failed to parse {name} in {filepath}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Unexpected error reading {name} in {filepath}: {e}")
 
         except zipfile.BadZipFile:
             logger.error(f"Invalid ZIP file: {filepath}")

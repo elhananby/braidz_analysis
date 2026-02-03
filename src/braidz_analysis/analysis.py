@@ -89,7 +89,13 @@ class SaccadeResults:
         # Apply column conditions
         for col, val in kwargs.items():
             if col in self.metrics.columns:
-                mask = mask & (self.metrics[col].to_numpy() == val)
+                col_vals = self.metrics[col].to_numpy()
+                # Handle NaN comparisons: NaN == NaN is False in numpy,
+                # so we need special handling
+                if isinstance(val, float) and np.isnan(val):
+                    mask = mask & np.isnan(col_vals)
+                else:
+                    mask = mask & (col_vals == val)
 
         # Filter traces
         filtered_traces = {}
@@ -195,12 +201,21 @@ class EventResults:
         if mask is None:
             mask = np.ones(len(self), dtype=bool)
 
-        # Apply conditions from metrics
+        # Apply conditions from metrics and metadata
+        # Handle NaN comparisons: NaN == NaN is False in numpy, so we need special handling
         for col, val in kwargs.items():
             if col in self.metrics.columns:
-                mask = mask & (self.metrics[col].to_numpy() == val)
+                col_vals = self.metrics[col].to_numpy()
+                if isinstance(val, float) and np.isnan(val):
+                    mask = mask & np.isnan(col_vals)
+                else:
+                    mask = mask & (col_vals == val)
             elif col in self.metadata.columns:
-                mask = mask & (self.metadata[col].to_numpy() == val)
+                col_vals = self.metadata[col].to_numpy()
+                if isinstance(val, float) and np.isnan(val):
+                    mask = mask & np.isnan(col_vals)
+                else:
+                    mask = mask & (col_vals == val)
 
         # Filter traces
         filtered_traces = {}
@@ -742,16 +757,29 @@ def analyze_event_responses(
             # For opto: use center of stimulus duration
             # For stim: use end of response window (or could be customized)
             duration_val = event_row.get("duration")
+            use_duration = False
             if duration_val is not None:
-                # Duration is typically in ms, convert to frames
-                duration_frames = int(duration_val / 1000 * config.fps)
-                reference_idx = event_idx + duration_frames // 2
-            else:
+                try:
+                    duration_numeric = float(duration_val)
+                    if duration_numeric > 0 and not np.isnan(duration_numeric):
+                        # Duration is typically in ms, convert to frames
+                        duration_frames = int(duration_numeric / 1000 * config.fps)
+                        reference_idx = event_idx + duration_frames // 2
+                        use_duration = True
+                except (ValueError, TypeError):
+                    logger.debug(f"Invalid duration value '{duration_val}', using fallback")
+
+            if not use_duration:
                 # Fallback: use center of response window
                 reference_idx = event_idx + config.response_window // 2
 
             # Ensure reference_idx is within bounds
-            reference_idx = min(reference_idx, len(angular_velocity) - config.heading_window - 1)
+            if reference_idx > len(angular_velocity) - config.heading_window - 1:
+                logger.debug(
+                    f"Reference index {reference_idx} out of bounds, clamping to "
+                    f"{len(angular_velocity) - config.heading_window - 1}"
+                )
+                reference_idx = len(angular_velocity) - config.heading_window - 1
 
         # Calculate metrics at the reference point
         heading_change = compute_heading_change(
